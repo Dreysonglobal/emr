@@ -468,9 +468,8 @@ async function loadStaff() {
 
   try {
     let query = supabase.from('profiles')
-      .select('id, full_name, email, role, department, staff_id, phone, status, deleted_at, created_at')
+      .select('id, full_name, email, role, department, staff_id, phone, status, created_at')
       .neq('role', 'admin')
-      .is('deleted_at', null)
       .order('full_name', { ascending: true });
 
     if (staffRoleFilter) query = query.eq('role', staffRoleFilter);
