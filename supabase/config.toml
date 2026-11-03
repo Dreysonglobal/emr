@@ -11,3 +11,6 @@ verify_jwt = true
 
 [functions.admin-reset-staff-password]
 verify_jwt = true
+
+[functions.admin-archive-staff]
+verify_jwt = true

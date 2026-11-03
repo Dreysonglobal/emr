@@ -445,6 +445,43 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Archive (Delete) Staff                                  -->
+  <!-- Only shown for deactivated staff profiles that are not yet     -->
+  <!-- archived. All patient records, clinical data and audit history -->
+  <!-- are preserved. The auth user is NOT deleted — only deleted_at  -->
+  <!-- is stamped on the profiles row (soft delete).                  -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div class="modal-overlay" id="archive-staff-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="archive-staff-modal-title" aria-hidden="true">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3 id="archive-staff-modal-title">Archive Staff Profile</h3>
+        <button class="btn btn-ghost btn-icon" id="close-archive-staff-modal" aria-label="Close dialog">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--danger);font-weight:600;margin-bottom:.75rem;">
+          ⚠️ This action cannot be undone through the interface.
+        </p>
+        <div style="background:var(--surface-2,#f5f5f5);border-radius:.5rem;padding:.75rem 1rem;margin-bottom:.75rem;">
+          <p style="margin:0 0 .35rem 0"><strong>Name:</strong> <span id="archive-staff-name" style="font-family:inherit"></span></p>
+          <p style="margin:0"><strong>Staff ID:</strong> <span id="archive-staff-id-display" style="font-family:monospace;font-size:.88rem"></span></p>
+        </div>
+        <p style="font-size:.9rem;color:var(--text-muted);margin:0">
+          Archiving removes this profile from the active staff list.
+          All patient records, prescriptions, laboratory results, clinical notes
+          and audit history will be preserved.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" id="cancel-archive-staff">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-archive-staff-btn">
+          <span class="btn-text">Archive Profile</span>
+          <span class="btn-loading" style="display:none">Archiving…</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="../js/admin.js"></script>
 </body>
 </html>

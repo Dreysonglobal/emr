@@ -45,6 +45,11 @@ let editStaffUserId = null;
 /** The DOM button that triggered the Edit modal — used to restore focus on close. */
 let editStaffTriggerBtn = null;
 
+// Archive (delete) staff context
+let archiveStaffUserId = null;
+/** The DOM button that triggered the Archive modal — used to restore focus on close. */
+let archiveStaffTriggerBtn = null;
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   initUI();
@@ -159,6 +164,12 @@ function initUI() {
   document.getElementById('submit-edit-staff-btn')?.addEventListener('click', e => {
     e.preventDefault();
     handleEditStaff();
+  });
+
+  // Archive Staff modal
+  setupModalClose('archive-staff-modal-overlay', 'close-archive-staff-modal', 'cancel-archive-staff');
+  document.getElementById('confirm-archive-staff-btn')?.addEventListener('click', () => {
+    void handleArchiveStaff();
   });
 
   // Audit view
@@ -457,8 +468,9 @@ async function loadStaff() {
 
   try {
     let query = supabase.from('profiles')
-      .select('id, full_name, email, role, department, staff_id, phone, status, created_at')
+      .select('id, full_name, email, role, department, staff_id, phone, status, deleted_at, created_at')
       .neq('role', 'admin')
+      .is('deleted_at', null)
       .order('full_name', { ascending: true });
 
     if (staffRoleFilter) query = query.eq('role', staffRoleFilter);
@@ -512,6 +524,14 @@ async function loadStaff() {
     container.querySelectorAll('.reset-password-btn').forEach(btn => {
       btn.addEventListener('click', () => handleResetPassword(btn.dataset.id, btn.dataset.name));
     });
+    container.querySelectorAll('.archive-staff-btn').forEach(btn => {
+      btn.addEventListener('click', () => openArchiveStaffModal(
+        btn.dataset.id,
+        btn.dataset.name,
+        btn.dataset.staffid,
+        btn
+      ));
+    });
 
   } catch (err) {
     console.error('loadStaff error:', err);
@@ -527,6 +547,12 @@ function renderStaffRow(s) {
   const statusClass = s.status === 'active' ? 'badge-success' : (s.status === 'suspended' ? 'badge-warning' : 'badge-danger');
   const statusLabel = s.status === 'active' ? 'Active' : (s.status === 'suspended' ? 'Suspended' : 'Deactivated');
   const isInactive = s.status !== 'active';
+  // Delete button: only shown for deactivated accounts that have not yet been archived.
+  // Relies on deleted_at being fetched in loadStaff() and being null for all rows
+  // shown (loadStaff filters WHERE deleted_at IS NULL), but we double-check status
+  // so the button never appears on active or suspended accounts even if the filter
+  // were to change in future.
+  const showDeleteBtn = s.status === 'deactivated';
 
   return `
     <tr>
@@ -550,6 +576,10 @@ function renderStaffRow(s) {
           ${isInactive
             ? `<button class="btn btn-ghost btn-xs reactivate-staff-btn" data-id="${escapeHtml(s.id)}" data-name="${name}" style="color:var(--success)">✅ Reactivate</button>`
             : `<button class="btn btn-ghost btn-xs deactivate-staff-btn" data-id="${escapeHtml(s.id)}" data-name="${name}" style="color:var(--danger)">🚫 Deactivate</button>`
+          }
+          ${showDeleteBtn
+            ? `<button class="btn btn-danger btn-xs archive-staff-btn" data-id="${escapeHtml(s.id)}" data-name="${name}" data-staffid="${escapeHtml(s.staff_id || '—')}" title="Archive (delete) this deactivated profile" style="margin-left:.2rem">🗑 Delete</button>`
+            : ''
           }
         </div>
       </td>
@@ -771,7 +801,85 @@ async function handleResetPassword(userId, name) {
   showToast('Password reset email sent', 'success');
 }
 
-// ─── System Settings ──────────────────────────────────────────────────────────
+// ─── Archive (Delete) Staff ───────────────────────────────────────────────────
+
+/**
+ * Opens the archive confirmation modal for a deactivated staff profile.
+ * @param {string} userId        - UUID of the target staff member
+ * @param {string} name          - Display name (already HTML-escaped in data attribute)
+ * @param {string} staffId       - Staff ID string (already HTML-escaped in data attribute)
+ * @param {HTMLElement} triggerBtn - The button that opened this modal (for focus return)
+ */
+function openArchiveStaffModal(userId, name, staffId, triggerBtn) {
+  archiveStaffUserId = userId;
+  archiveStaffTriggerBtn = triggerBtn || null;
+
+  // Populate modal content
+  const nameEl = document.getElementById('archive-staff-name');
+  const idEl = document.getElementById('archive-staff-id-display');
+  if (nameEl) nameEl.textContent = name || '—';
+  if (idEl) idEl.textContent = staffId || '—';
+
+  const overlay = document.getElementById('archive-staff-modal-overlay');
+  if (overlay) {
+    overlay._triggerElement = archiveStaffTriggerBtn;
+    overlay.removeAttribute('aria-hidden');
+    overlay.classList.add('active');
+    // Move focus into the Cancel button (safer than Confirm for destructive actions)
+    const cancelBtn = document.getElementById('cancel-archive-staff');
+    if (cancelBtn) setTimeout(() => cancelBtn.focus(), 50);
+  }
+}
+
+/**
+ * Calls admin-archive-staff Edge Function and removes the row from the list on success.
+ */
+async function handleArchiveStaff() {
+  const userId = archiveStaffUserId;
+  if (!userId) return;
+
+  const confirmBtn = document.getElementById('confirm-archive-staff-btn');
+  const btnText = confirmBtn?.querySelector('.btn-text');
+  const btnLoading = confirmBtn?.querySelector('.btn-loading');
+  if (confirmBtn) confirmBtn.disabled = true;
+  if (btnText) btnText.style.display = 'none';
+  if (btnLoading) btnLoading.style.display = 'inline';
+
+  try {
+    const { error } = await callEdgeFunction('admin-archive-staff', { target_user_id: userId });
+
+    if (error) {
+      showToast(typeof error === 'string' ? error : 'Failed to archive staff profile', 'error');
+      return;
+    }
+
+    showToast('Staff profile archived and removed from the active list', 'success');
+
+    // Close modal — setupModalClose will return focus to trigger button
+    const overlay = document.getElementById('archive-staff-modal-overlay');
+    if (overlay) {
+      const trigger = overlay._triggerElement || archiveStaffTriggerBtn || document.body;
+      if (trigger && typeof trigger.focus === 'function') trigger.focus();
+      overlay._triggerElement = null;
+      overlay.classList.remove('active');
+      overlay.setAttribute('aria-hidden', 'true');
+    }
+
+    archiveStaffUserId = null;
+    archiveStaffTriggerBtn = null;
+
+    // Reload the staff list so the archived profile disappears
+    viewLoaded.staff = false;
+    await loadStaff();
+    viewLoaded.staff = true;
+  } finally {
+    if (confirmBtn) confirmBtn.disabled = false;
+    if (btnText) btnText.style.display = 'inline';
+    if (btnLoading) btnLoading.style.display = 'none';
+  }
+}
+
+// ─── System Settings ───────────────────────────────────────────────────────────
 async function loadSettings() {
   const container = document.getElementById('settings-limits-body');
   if (!container) return;
