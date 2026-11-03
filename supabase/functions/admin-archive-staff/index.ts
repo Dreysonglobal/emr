@@ -45,8 +45,23 @@ interface ArchiveStaffBody {
 
 Deno.serve(async (req: Request): Promise<Response> => {
   // ── CORS preflight ────────────────────────────────────────────────────────
-  const corsPreflight = handleCors(req);
-  if (corsPreflight) return corsPreflight;
+  if (req.method === 'OPTIONS') {
+    const corsPreflight = handleCors(req);
+    if (corsPreflight && corsPreflight.status === 200) {
+      return corsPreflight;
+    }
+    // Preflight fallback: ensure HTTP 200 is returned immediately with required CORS headers
+    return new Response('ok', {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Origin': 'https://lifeblossom.github.io',
+        'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Credentials': 'true',
+        'Vary': 'Origin',
+      },
+    });
+  }
 
   const requestOrigin = req.headers.get('Origin');
 

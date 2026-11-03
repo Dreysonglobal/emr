@@ -13,4 +13,4 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.admin-archive-staff]
-verify_jwt = true
+verify_jwt = false
