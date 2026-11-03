@@ -42,6 +42,8 @@ let auditDateTo = '';
 
 // Edit staff context
 let editStaffUserId = null;
+/** The DOM button that triggered the Edit modal — used to restore focus on close. */
+let editStaffTriggerBtn = null;
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
@@ -189,13 +191,34 @@ function initUI() {
 function setupModalClose(overlayId, closeId, cancelId) {
   const close = () => {
     const overlay = document.getElementById(overlayId);
-    if (overlay) {
-      overlay.classList.remove('active');
-      overlay.setAttribute('aria-hidden', 'true');
-      // Return focus to the button that opened the modal if possible
-      const trigger = document.querySelector(`[data-opens="${overlayId}"]`);
-      if (trigger) trigger.focus();
+    if (!overlay) return;
+
+    // ── ACCESSIBILITY FIX ──────────────────────────────────────────────────
+    // Move keyboard focus OUTSIDE the modal BEFORE setting aria-hidden="true".
+    // Setting aria-hidden while a child element is focused causes the browser
+    // warning: "Blocked aria-hidden on an element because its descendant
+    // retained focus." Moving focus first prevents that warning and keeps
+    // keyboard navigation working correctly.
+    //
+    // Preference order:
+    //   1. overlay._triggerElement — the DOM element that opened this modal
+    //      (set by the calling code so we can return focus precisely).
+    //   2. A button with [data-opens="<overlayId>"] — a declarative trigger.
+    //   3. The close / cancel button (guaranteed to exist and be focusable).
+    //   4. document.body as a safe fallback.
+    const trigger =
+      overlay._triggerElement ||
+      document.querySelector(`[data-opens="${overlayId}"]`) ||
+      document.getElementById(closeId) ||
+      document.getElementById(cancelId) ||
+      document.body;
+    if (trigger && typeof trigger.focus === 'function') {
+      trigger.focus();
     }
+    overlay._triggerElement = null;
+
+    overlay.classList.remove('active');
+    overlay.setAttribute('aria-hidden', 'true');
   };
   document.getElementById(closeId)?.addEventListener('click', close);
   document.getElementById(cancelId)?.addEventListener('click', close);
@@ -477,7 +500,7 @@ async function loadStaff() {
     container.querySelectorAll('.edit-staff-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const s = data.find(x => x.id === btn.dataset.id);
-        if (s) openEditStaffModal(s);
+        if (s) openEditStaffModal(s, btn);
       });
     });
     container.querySelectorAll('.deactivate-staff-btn').forEach(btn => {
@@ -609,8 +632,9 @@ async function handleAddStaff() {
 }
 
 // ─── Edit Staff Modal ─────────────────────────────────────────────────────────
-function openEditStaffModal(staffMember) {
+function openEditStaffModal(staffMember, triggerBtn) {
   editStaffUserId = staffMember.id;
+  editStaffTriggerBtn = triggerBtn || null;
   const form = document.getElementById('edit-staff-form');
   if (!form) return;
 
@@ -626,12 +650,17 @@ function openEditStaffModal(staffMember) {
   if (departmentEl) departmentEl.value = staffMember.department || '';
   if (phoneEl) phoneEl.value = staffMember.phone || '';
 
-  document.getElementById('edit-staff-modal-overlay')?.classList.add('active');
+  // Remove aria-hidden BEFORE making the overlay visible, then shift focus in.
+  // This prevents the "Blocked aria-hidden on element because its descendant
+  // retained focus" accessibility warning.
   const editOverlay = document.getElementById('edit-staff-modal-overlay');
   if (editOverlay) {
-    editOverlay.classList.add('active');
+    // Store the trigger so setupModalClose can return focus to it on close.
+    editOverlay._triggerElement = editStaffTriggerBtn;
     editOverlay.removeAttribute('aria-hidden');
-    const firstInput = editOverlay.querySelector('input, select');
+    editOverlay.classList.add('active');
+    // Move focus into the first real input after the browser has painted the modal.
+    const firstInput = editOverlay.querySelector('input:not([type="hidden"]), select');
     if (firstInput) setTimeout(() => firstInput.focus(), 50);
   }
 }
@@ -670,7 +699,21 @@ async function handleEditStaff() {
 
   showToast('Staff profile updated', 'success');
   const editOverlay2 = document.getElementById('edit-staff-modal-overlay');
-  if (editOverlay2) { editOverlay2.classList.remove('active'); editOverlay2.setAttribute('aria-hidden', 'true'); }
+  if (editOverlay2) {
+    // Move focus outside the modal before hiding it to prevent the
+    // "Blocked aria-hidden on element because its descendant retained focus" warning.
+    const focusTarget =
+      editStaffTriggerBtn ||
+      editOverlay2._triggerElement ||
+      document.querySelector('[data-opens="edit-staff-modal-overlay"]') ||
+      document.body;
+    if (focusTarget && typeof focusTarget.focus === 'function') {
+      focusTarget.focus();
+    }
+    editOverlay2._triggerElement = null;
+    editOverlay2.classList.remove('active');
+    editOverlay2.setAttribute('aria-hidden', 'true');
+  }
   editStaffUserId = null;
   viewLoaded.staff = false;
   await loadStaff();

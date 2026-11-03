@@ -284,6 +284,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   } catch (err) {
     console.error('Unhandled exception in admin-deactivate-staff:', err);
-    return errorResponse('Internal server error', 500);
+    // Include requestOrigin so CORS headers are present on error responses too
+    const origin = req.headers.get('Origin');
+    return errorResponse('Internal server error', 500, undefined, {}, origin);
   }
 });

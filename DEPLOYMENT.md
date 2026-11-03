@@ -11,12 +11,13 @@ For an existing project, apply any unapplied files in `supabase/migrations/` bef
 Install the Supabase CLI and authenticate it, then from the project root run:
 
 ```powershell
+supabase login
 supabase link --project-ref yealxvgednecmwnehfrs
-supabase secrets set APP_ORIGIN=https://your-staff-app.example
-supabase functions deploy admin-create-staff
-supabase functions deploy admin-update-staff
-supabase functions deploy admin-deactivate-staff
-supabase functions deploy admin-reset-staff-password
+supabase secrets set APP_ORIGIN=https://lifeblossom.github.io
+supabase functions deploy admin-create-staff --project-ref yealxvgednecmwnehfrs
+supabase functions deploy admin-update-staff --project-ref yealxvgednecmwnehfrs
+supabase functions deploy admin-deactivate-staff --project-ref yealxvgednecmwnehfrs
+supabase functions deploy admin-reset-staff-password --project-ref yealxvgednecmwnehfrs
 ```
 
 Set `APP_ORIGIN` to the exact HTTPS origin that hosts the frontend (scheme and hostname, with an optional port; no path or trailing slash). The CORS layer intentionally does not allow all origins. For local development, set the origin to the local web server origin. Never put `SUPABASE_SERVICE_ROLE_KEY` in browser code or the frontend hosting environment.
