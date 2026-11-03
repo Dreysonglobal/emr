@@ -209,7 +209,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
 
     // 5. Update profiles.status
-    const { data: updatedProfile, error: updateError } = await adminClient
+    // SECURITY DESIGN: Use the caller's authenticated administrator JWT (via anonClient)
+    // for updating public.profiles. In PostgreSQL, this sets auth.uid() to the verified
+    // administrator's UUID, which satisfies the profiles_update_policy RLS rule and passes
+    // the trg_protect_profile_sensitive_fields trigger via public.is_admin().
+    // We do NOT fall back to service_role for this table update; if the authenticated update
+    // fails, the operation fails securely.
+    const { data: updatedProfile, error: updateError } = await anonClient
       .from('profiles')
       .update({
         status: newStatus,
@@ -220,7 +226,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       .single();
 
     if (updateError || !updatedProfile) {
-      console.error('Failed to update status in profiles table:', updateError?.message);
+      console.error('Failed to update status in profiles table:', {
+        target_user_id: targetUserId,
+        action,
+        error_code: updateError?.code,
+        error_message: updateError?.message,
+      });
       return errorResponse('Failed to update staff member status', 500, undefined, {}, requestOrigin);
     }
 
@@ -235,7 +246,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
           ban_duration: '876000h',
         });
       } catch (authBanErr) {
-        console.warn('Auth session revocation/ban note (non-fatal):', authBanErr);
+        console.warn('Auth session revocation/ban note (non-fatal):', {
+          target_user_id: targetUserId,
+          error: authBanErr instanceof Error ? authBanErr.message : String(authBanErr),
+        });
       }
     } else if (newStatus === 'active') {
       try {
@@ -244,7 +258,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
           ban_duration: 'none',
         });
       } catch (authUnbanErr) {
-        console.warn('Auth unban note (non-fatal):', authUnbanErr);
+        console.warn('Auth unban note (non-fatal):', {
+          target_user_id: targetUserId,
+          error: authUnbanErr instanceof Error ? authUnbanErr.message : String(authUnbanErr),
+        });
       }
     }
 
@@ -283,7 +300,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       requestOrigin
     );
   } catch (err) {
-    console.error('Unhandled exception in admin-deactivate-staff:', err);
+    console.error('Unhandled exception in admin-deactivate-staff:', {
+      error: err instanceof Error ? { name: err.name, message: err.message } : 'Unknown error',
+    });
     // Include requestOrigin so CORS headers are present on error responses too
     const origin = req.headers.get('Origin');
     return errorResponse('Internal server error', 500, undefined, {}, origin);
