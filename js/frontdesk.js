@@ -148,8 +148,16 @@ function initUI(profile) {
   document.getElementById('new-encounter-btn').addEventListener('click', openEncounterModal);
 
   // ── Patient chart side panel ──
-  document.getElementById('close-chart-panel').addEventListener('click', closeChartPanel);
-  document.getElementById('chart-panel-overlay').addEventListener('click', closeChartPanel);
+  document.getElementById('close-chart-panel')?.addEventListener('click', closeChartPanel);
+  document.getElementById('chart-panel-overlay')?.addEventListener('click', closeChartPanel);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const panel = document.getElementById('patient-chart-panel');
+      if (panel?.classList.contains('open')) {
+        closeChartPanel();
+      }
+    }
+  });
 
   // ── Encounter modal ──
   setupEncounterModal();
@@ -963,8 +971,12 @@ async function submitOpenEncounter() {
 }
 
 // ─── Patient Chart Side Panel ─────────────────────────────────────────────────
-async function openPatientChart(patient) {
+let chartPanelTriggerBtn = null;
+
+async function openPatientChart(patient, triggerBtn = null) {
   if (!patient) return;
+
+  chartPanelTriggerBtn = triggerBtn || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
 
   const panel = document.getElementById('patient-chart-panel');
   const overlay = document.getElementById('chart-panel-overlay');
@@ -974,10 +986,18 @@ async function openPatientChart(patient) {
   const fullName = `${patient.first_name || ''} ${patient.middle_name ? patient.middle_name + ' ' : ''}${patient.last_name || ''}`.trim();
   title.textContent = fullName || 'Patient Chart';
 
-  // Open the panel
+  // Open the panel and configure accessible state
   panel.classList.add('open');
   panel.setAttribute('aria-hidden', 'false');
-  overlay.classList.add('visible');
+  panel.setAttribute('aria-modal', 'true');
+  if (overlay) {
+    overlay.classList.add('visible');
+    overlay.setAttribute('aria-hidden', 'false');
+  }
+
+  // Move keyboard focus inside the panel
+  const closeBtn = document.getElementById('close-chart-panel');
+  if (closeBtn) setTimeout(() => closeBtn.focus(), 50);
 
   showLoading(body, 'Loading patient chart…');
 
@@ -1061,6 +1081,9 @@ async function openPatientChart(patient) {
       <button class="btn btn-primary btn-sm chart-open-encounter-btn" aria-label="Open encounter for this patient">
         📋 Open Encounter
       </button>
+      <button type="button" class="btn btn-ghost btn-sm chart-cancel-btn" aria-label="Close patient chart">
+        Cancel
+      </button>
     </div>
   `;
 
@@ -1069,6 +1092,9 @@ async function openPatientChart(patient) {
     closeChartPanel();
     setTimeout(() => openEncounterModal(fullPatient), 150);
   });
+
+  // Bind "Cancel" from within chart
+  body.querySelector('.chart-cancel-btn')?.addEventListener('click', closeChartPanel);
 }
 
 function renderDemoField(label, value) {
@@ -1084,9 +1110,23 @@ function renderDemoField(label, value) {
 function closeChartPanel() {
   const panel = document.getElementById('patient-chart-panel');
   const overlay = document.getElementById('chart-panel-overlay');
+  if (!panel) return;
+
+  // Move keyboard focus outside the panel BEFORE setting aria-hidden="true"
+  if (chartPanelTriggerBtn && typeof chartPanelTriggerBtn.focus === 'function' && document.body.contains(chartPanelTriggerBtn)) {
+    chartPanelTriggerBtn.focus();
+  } else if (panel.contains(document.activeElement)) {
+    document.activeElement?.blur();
+  }
+  chartPanelTriggerBtn = null;
+
   panel.classList.remove('open');
   panel.setAttribute('aria-hidden', 'true');
-  overlay.classList.remove('visible');
+  panel.setAttribute('aria-modal', 'false');
+  if (overlay) {
+    overlay.classList.remove('visible');
+    overlay.setAttribute('aria-hidden', 'true');
+  }
 }
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
