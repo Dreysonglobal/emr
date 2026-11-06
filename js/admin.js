@@ -330,8 +330,13 @@ async function callEdgeFunction(path, body) {
       },
       body: JSON.stringify(body),
     });
-    const json = await res.json();
-    if (!res.ok) return { error: json.error || 'Request failed' };
+    let json = {};
+    try {
+      json = await res.json();
+    } catch {
+      json = { error: 'Server returned status ' + res.status };
+    }
+    if (!res.ok) return { error: json.error || json.message || ('Request failed with status ' + res.status) };
     return { data: json };
   } catch (err) {
     console.error(`Edge Function '${path}' request failed:`, err);

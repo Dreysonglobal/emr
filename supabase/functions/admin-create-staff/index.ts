@@ -6,24 +6,25 @@
  *
  * Privileged operation: Creates a new staff member account (Auth user + profile).
  * Logic:
- * 1. Handle OPTIONS preflight with corsHeaders
- * 2. Verify Bearer token from Authorization header using createClient with SUPABASE_URL + SUPABASE_ANON_KEY and getUser()
- * 3. Using service role client (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY), verify caller has admin role and active status by querying profiles table
- * 4. Validate request body: email required, valid email format, full_name required, role must be one of:
- *    doctor, nurse, pharmacist, front_desk, lab_technician (cannot create admin through this function)
- * 5. Check staff account limits: query profiles table WHERE role = requested_role AND status = 'active', count must be < 10 (read limit from system_settings)
- * 6. Create Auth user: adminClient.auth.admin.createUser({ email, password, email_confirm: true })
- * 7. Insert profile row with the new auth user's ID
- * 8. If profile insert fails, attempt to delete the auth user (compensating cleanup)
- * 9. Do not send an invitation email; the active administrator sets the initial password
- * 10. Log to audit_logs (never log passwords or sensitive medical data)
- * 11. Return 201 with { success: true, user_id, staff_id }
- * 12. Return safe error messages: 400 for validation, 403 for unauthorized, 409 for limit exceeded or duplicate, 500 for internal errors
+ * 1. Immediate OPTIONS preflight handling with CORS headers
+ * 2. Verify Bearer token from Authorization header using anonClient.auth.getUser()
+ * 3. Verify caller has admin role and active status in profiles table using service role client
+ * 4. Validate request body (email, full_name, role, password >= 8 chars)
+ * 5. Verify requested role is permitted (cannot create admin through this function)
+ * 6. Generate or assign staff ID with uniqueness check
+ * 7. Verify email uniqueness and check system_settings role quota limit
+ * 8. Create Supabase Auth user (email_confirm: true)
+ * 9. Insert corresponding profile row with new auth user's ID
+ * 10. Compensating cleanup: if profile insert fails, delete the created auth user
+ * 11. Record administrative audit log (passwords strictly omitted)
+ * 12. Return 201 Created with safe profile details and CORS headers on all responses
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   handleCors,
+  corsHeaders,
+  isAllowedOrigin,
   jsonResponse,
   errorResponse,
 } from '../_shared/cors.ts';
@@ -49,19 +50,74 @@ interface CreateStaffBody {
   password?: string;
 }
 
-Deno.serve(async (req: Request): Promise<Response> => {
-  // 1. Handle OPTIONS preflight with corsHeaders
-  const corsPreflight = handleCors(req);
-  if (corsPreflight) return corsPreflight;
+const ROLE_STAFF_ID_PREFIXES: Record<StaffRole, string> = {
+  doctor: 'DOC',
+  nurse: 'NUR',
+  pharmacist: 'PHM',
+  front_desk: 'FDK',
+  lab_technician: 'LAB',
+};
 
-  const requestOrigin = req.headers.get('Origin');
+/**
+ * Assigns or generates a canonical unique Staff ID for the new staff member.
+ */
+async function resolveStaffId(
+  adminClient: SupabaseClient,
+  role: StaffRole,
+  providedStaffId?: string | null
+): Promise<string> {
+  const clean = providedStaffId?.trim();
+  if (clean) return clean;
+
+  const prefix = ROLE_STAFF_ID_PREFIXES[role] || 'STF';
+  const { count } = await adminClient
+    .from('profiles')
+    .select('id', { count: 'exact', head: true })
+    .eq('role', role);
+
+  const startNum = (count ?? 0) + 1;
+  for (let offset = 0; offset < 50; offset++) {
+    const candidate = `DGH-${prefix}-${String(startNum + offset).padStart(3, '0')}`;
+    const { data: existing } = await adminClient
+      .from('profiles')
+      .select('id')
+      .eq('staff_id', candidate)
+      .maybeSingle();
+
+    if (!existing) {
+      return candidate;
+    }
+  }
+
+  return `DGH-${prefix}-${Date.now().toString().slice(-4)}`;
+}
+
+Deno.serve(async (req: Request): Promise<Response> => {
+  // ── 1. Immediate CORS preflight handling ───────────────────────────────────
+  // Preflight MUST be evaluated before any auth verification or body parsing.
+  if (req.method === 'OPTIONS') {
+    const corsPreflight = handleCors(req);
+    if (corsPreflight) return corsPreflight;
+
+    // Safety fallback: if origin is permitted, return 200 with full CORS headers
+    const origin = req.headers.get('Origin') || req.headers.get('origin');
+    if (isAllowedOrigin(origin)) {
+      return new Response('ok', {
+        status: 200,
+        headers: corsHeaders(origin),
+      });
+    }
+    return new Response('Forbidden: Origin not allowed', { status: 403 });
+  }
+
+  const requestOrigin = req.headers.get('Origin') || req.headers.get('origin');
 
   if (req.method !== 'POST') {
     return errorResponse('Method Not Allowed. Expected POST.', 405, undefined, {}, requestOrigin);
   }
 
   try {
-    // Read environment variables directly
+    // ── 2. Environment variables ─────────────────────────────────────────────
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
     const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -71,8 +127,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return errorResponse('Internal server configuration error', 500, undefined, {}, requestOrigin);
     }
 
-    // 2. Verify Bearer token from Authorization header using createClient with SUPABASE_URL + SUPABASE_ANON_KEY and getUser()
-    const authHeader = req.headers.get('Authorization');
+    // ── 3. Caller authentication via Bearer JWT ──────────────────────────────
+    const authHeader = req.headers.get('Authorization') || req.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return errorResponse('Missing or invalid Authorization header. Bearer token required.', 401, undefined, {}, requestOrigin);
     }
@@ -92,7 +148,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return errorResponse('Invalid or expired authentication session', 401, undefined, {}, requestOrigin);
     }
 
-    // 3. Using service role client (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY), verify caller has admin role and active status by querying profiles table
+    // ── 4. Caller administrator role authorization ───────────────────────────
     const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
       auth: { persistSession: false },
     });
@@ -116,26 +172,25 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return errorResponse('Forbidden: Administrator account is not active', 403, undefined, {}, requestOrigin);
     }
 
-    // 4. Validate request body: email required, valid email format, full_name required,
-    // role must be one of: doctor, nurse, pharmacist, front_desk, lab_technician (cannot create admin through this function)
+    // ── 5. Request body validation ───────────────────────────────────────────
     const { data: body, error: parseError } = await safeParseJson<CreateStaffBody>(req);
     if (parseError || !body) {
       return errorResponse(parseError || 'Invalid JSON body', 400, undefined, {}, requestOrigin);
     }
 
-    // Email validation
+    // Validate email
     if (!body.email || typeof body.email !== 'string' || !isValidEmail(body.email)) {
       return errorResponse('Valid email address is required', 400, undefined, {}, requestOrigin);
     }
     const normalizedEmail = body.email.toLowerCase().trim();
 
-    // Full name validation
+    // Validate full name
     if (!body.full_name || typeof body.full_name !== 'string' || body.full_name.trim() === '') {
       return errorResponse('Full name is required', 400, undefined, {}, requestOrigin);
     }
     const cleanFullName = body.full_name.trim();
 
-    // Role validation: strictly enforce allowed staff roles (cannot create admin)
+    // Validate role: must be in ALLOWED_STAFF_ROLES (admin cannot be created here)
     if (!body.role || !ALLOWED_STAFF_ROLES.includes(body.role as StaffRole)) {
       return errorResponse(
         `Invalid role. Role must be one of: ${ALLOWED_STAFF_ROLES.join(', ')}. Creating an admin through this function is not permitted.`,
@@ -147,20 +202,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
     const requestedRole = body.role as StaffRole;
 
+    // Validate password
     if (typeof body.password !== 'string' || Array.from(body.password).length < 8) {
       return errorResponse('Password must be at least 8 characters long', 400, undefined, {}, requestOrigin);
     }
 
-    const cleanStaffId = body.staff_id?.trim() || null;
     const cleanDepartment = body.department?.trim() || null;
     const cleanPhone = body.phone?.trim() || null;
 
-    // Check unique staff_id if provided
-    if (cleanStaffId) {
+    // ── 6. Assign or generate Staff ID and verify uniqueness ──────────────────
+    const assignedStaffId = await resolveStaffId(adminClient, requestedRole, body.staff_id);
+
+    // If an explicit staff_id was provided, verify it does not conflict
+    if (body.staff_id && body.staff_id.trim() !== '') {
       const { data: existingStaffId, error: checkIdError } = await adminClient
         .from('profiles')
         .select('id')
-        .eq('staff_id', cleanStaffId)
+        .eq('staff_id', assignedStaffId)
         .maybeSingle();
 
       if (checkIdError) {
@@ -170,7 +228,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       if (existingStaffId) {
         return errorResponse(
-          `Staff ID '${cleanStaffId}' is already assigned to another staff member`,
+          `Staff ID '${assignedStaffId}' is already assigned to another staff member`,
           409,
           undefined,
           {},
@@ -195,7 +253,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return errorResponse(`An account with email '${normalizedEmail}' already exists`, 409, undefined, {}, requestOrigin);
     }
 
-    // 5. Check staff account limits: query profiles table WHERE role = requested_role AND status = 'active', count must be < 10 (read limit from system_settings)
+    // ── 7. Enforce staff account quota limit from system_settings ───────────
     const quotaCheck = await checkStaffAccountLimit(adminClient, requestedRole);
     if (quotaCheck.error) {
       return errorResponse(quotaCheck.error, 500, undefined, {}, requestOrigin);
@@ -211,7 +269,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    // Create a confirmed account with the password supplied by the verified administrator.
+    // ── 8. Create Supabase Auth user (email auto-confirmed) ──────────────────
     const { data: authData, error: authCreateError } = await adminClient.auth.admin.createUser({
       email: normalizedEmail,
       password: body.password,
@@ -220,7 +278,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         full_name: cleanFullName,
         role: requestedRole,
         department: cleanDepartment,
-        staff_id: cleanStaffId,
+        staff_id: assignedStaffId,
       },
     });
 
@@ -241,7 +299,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     const newUserId = authData.user.id;
 
-    // 7. Insert profile row with the new auth user's ID
+    // ── 9. Insert corresponding profile row ──────────────────────────────────
     const { data: newProfile, error: profileInsertError } = await adminClient
       .from('profiles')
       .insert({
@@ -249,7 +307,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         email: normalizedEmail,
         full_name: cleanFullName,
         role: requestedRole,
-        staff_id: cleanStaffId,
+        staff_id: assignedStaffId,
         department: cleanDepartment,
         phone: cleanPhone,
         status: 'active',
@@ -259,7 +317,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       .select('id, full_name, email, role, staff_id, department, phone, status, created_at')
       .single();
 
-    // 8. If profile insert fails, attempt to delete the auth user (compensating cleanup)
+    // ── 10. Compensating cleanup: rollback auth user if profile insert fails ─
     if (profileInsertError || !newProfile) {
       console.error(
         `Profile insert failed for auth user ${newUserId}. Initiating compensating cleanup:`,
@@ -282,7 +340,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const clientIp = getClientIp(req);
     const userAgent = req.headers.get('user-agent') || 'Unknown';
 
-    // 10. Log to audit_logs (Strictly omit passwords, tokens, and sensitive medical data)
+    // ── 11. Record immutable audit log entry ─────────────────────────────────
+    // Strictly omit passwords, tokens, and sensitive medical data
     await recordAuditLog(adminClient, {
       actor_id: callerUser.id,
       actor_email: callerProfile.email || callerUser.email,
@@ -290,7 +349,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       resource_type: 'profiles',
       resource_id: newUserId,
       details: {
-        staff_id: cleanStaffId,
+        staff_id: assignedStaffId,
         role: requestedRole,
         department: cleanDepartment,
         email: normalizedEmail,
@@ -300,13 +359,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       user_agent: userAgent,
     });
 
-    // Return only safe account information; never return or log the password.
+    // ── 12. Return safe account response with CORS headers ───────────────────
     return jsonResponse(
       {
         success: true,
         message: 'Staff account successfully created',
         user_id: newUserId,
-        staff_id: cleanStaffId,
+        staff_id: assignedStaffId,
         profile: newProfile,
       },
       201,
