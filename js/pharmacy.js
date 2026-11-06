@@ -371,8 +371,8 @@ function renderInboxItem(t) {
       <div class="list-item-avatar">${getInitials(name)}</div>
       <div class="list-item-body">
         <div class="list-item-title">${escapeHtml(name)} <span class="text-muted" style="font-weight:400">· ${escapeHtml(patient.hospital_number || '')}</span></div>
-        <div class="list-item-meta">From: ${escapeHtml(sender.full_name || '—')} (${escapeHtml(sender.department || '')})</div>
-        ${t.message ? `<div class="list-item-note">${escapeHtml(t.message)}</div>` : ''}
+        <div class="list-item-meta">From: ${escapeHtml(sender.full_name || '—')} (${escapeHtml(sender.department || t.from_department || '')})</div>
+        ${t.reason ? `<div class="list-item-note">${escapeHtml(t.reason)}</div>` : ''}
       </div>
       <div class="list-item-aside">
         <span class="badge ${statusCls}">${formatTransferStatus(t.status)}</span>
@@ -464,7 +464,7 @@ async function openPatientPanel(transfer) {
     </div>
 
     <div style="margin-bottom:.5rem;font-size:.85rem;color:var(--text-muted)">From: ${escapeHtml(transfer.sender?.full_name || '—')}</div>
-    ${transfer.message ? `<div class="list-item-note" style="margin-bottom:1rem">${escapeHtml(transfer.message)}</div>` : ''}
+    ${transfer.reason ? `<div class="list-item-note" style="margin-bottom:1rem">${escapeHtml(transfer.reason)}</div>` : ''}
 
     <hr style="margin:.75rem 0">
     <div style="font-weight:600;font-size:.9rem;margin-bottom:.6rem">Active Prescriptions</div>

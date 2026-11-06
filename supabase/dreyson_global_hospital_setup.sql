@@ -257,13 +257,17 @@ CREATE TABLE IF NOT EXISTS public.patients (
     date_of_birth DATE NOT NULL,
     sex sex_type NOT NULL,
     phone TEXT,
+    alt_phone TEXT,
+    email TEXT,
+    address TEXT,
+    next_of_kin TEXT,
+    admin_notes TEXT,
     emergency_contact_name TEXT,
     emergency_contact_phone TEXT,
     emergency_contact_relationship TEXT,
     blood_group TEXT,
     genotype TEXT,
     allergies_summary TEXT,
-    address TEXT,
     registered_by UUID REFERENCES public.profiles(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -1053,7 +1057,11 @@ SELECT
     emergency_contact_phone,
     registered_by,
     created_at,
-    updated_at
+    updated_at,
+    alt_phone,
+    email,
+    next_of_kin,
+    admin_notes
 FROM public.patients
 WHERE public.is_active_staff()
   AND (
@@ -1099,7 +1107,11 @@ BEGIN
         date_of_birth,
         sex,
         phone,
+        alt_phone,
+        email,
         address,
+        next_of_kin,
+        admin_notes,
         emergency_contact_name,
         emergency_contact_relationship,
         emergency_contact_phone,
@@ -1111,7 +1123,11 @@ BEGIN
         NEW.date_of_birth,
         NEW.sex,
         NEW.phone,
+        NEW.alt_phone,
+        NEW.email,
         NEW.address,
+        NEW.next_of_kin,
+        NEW.admin_notes,
         NEW.emergency_contact_name,
         NEW.emergency_contact_relationship,
         NEW.emergency_contact_phone,
@@ -1155,17 +1171,21 @@ BEGIN
     -- Update only demographic and contact fields in patients table; never touches blood_group or genotype
     UPDATE public.patients
     SET
-        first_name = NEW.first_name,
-        last_name = NEW.last_name,
-        middle_name = NEW.middle_name,
-        date_of_birth = NEW.date_of_birth,
-        sex = NEW.sex,
-        phone = NEW.phone,
-        address = NEW.address,
-        emergency_contact_name = NEW.emergency_contact_name,
+        first_name                     = NEW.first_name,
+        last_name                      = NEW.last_name,
+        middle_name                    = NEW.middle_name,
+        date_of_birth                  = NEW.date_of_birth,
+        sex                            = NEW.sex,
+        phone                          = NEW.phone,
+        alt_phone                      = NEW.alt_phone,
+        email                          = NEW.email,
+        address                        = NEW.address,
+        next_of_kin                    = NEW.next_of_kin,
+        admin_notes                    = NEW.admin_notes,
+        emergency_contact_name         = NEW.emergency_contact_name,
         emergency_contact_relationship = NEW.emergency_contact_relationship,
-        emergency_contact_phone = NEW.emergency_contact_phone,
-        updated_at = now()
+        emergency_contact_phone        = NEW.emergency_contact_phone,
+        updated_at                     = now()
     WHERE id = OLD.id;
 
     RETURN NEW;

@@ -241,7 +241,7 @@ async function loadNotifications() {
     item.addEventListener('click', () => {
       document.getElementById('notif-panel').classList.remove('open');
       const transfer = data.find(t => t.id === item.dataset.transferId);
-      if (transfer && transfer.patient) openPatientChart(transfer.patient);
+      if (transfer && transfer.patient) openPatientChart(transfer.patient, item);
     });
   });
 }
@@ -319,7 +319,7 @@ async function loadRecentRegistrations() {
     btn.addEventListener('click', async () => {
       const { data: patient, error: pe } = await getPatient(btn.dataset.pid);
       if (pe || !patient) { showToast('Could not load patient', 'error'); return; }
-      openPatientChart(patient);
+      openPatientChart(patient, btn);
     });
   });
 }
@@ -569,13 +569,14 @@ async function doPatientSearch() {
   }).join('');
 
   container.querySelectorAll('.patient-search-card').forEach(card => {
-    const handler = async () => {
+    const handler = async (e) => {
+      const trigger = e?.target?.closest('button') || card;
       const { data: patient, error: pe } = await getPatient(card.dataset.pid);
       if (pe || !patient) { showToast('Could not load patient', 'error'); return; }
-      openPatientChart(patient);
+      openPatientChart(patient, trigger);
     };
     card.addEventListener('click', handler);
-    card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') handler(); });
+    card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') handler(e); });
   });
 
   // Pagination
@@ -662,8 +663,8 @@ function renderInboxItem(t) {
           ${escapeHtml(name)}
           <span class="text-muted" style="font-weight:400">· ${escapeHtml(patient.hospital_number || '')}</span>
         </div>
-        <div class="list-item-meta">From: ${escapeHtml(sender.full_name || '—')} (${escapeHtml(sender.department || '')})</div>
-        ${t.message ? `<div class="list-item-note">${escapeHtml(t.message)}</div>` : ''}
+        <div class="list-item-meta">From: ${escapeHtml(sender.full_name || '—')} (${escapeHtml(sender.department || t.from_department || '')})</div>
+        ${t.reason ? `<div class="list-item-note">${escapeHtml(t.reason)}</div>` : ''}
       </div>
       <div class="list-item-aside">
         <span class="badge ${statusClass}">${formatTransferStatus(t.status)}</span>
@@ -701,7 +702,7 @@ function bindInboxActions(container, data) {
     const handler = e => {
       if (e.target.closest('.ack-btn') || e.target.closest('.status-select')) return;
       const transfer = data.find(t => t.id === item.dataset.id);
-      if (transfer && transfer.patient) openPatientChart(transfer.patient);
+      if (transfer && transfer.patient) openPatientChart(transfer.patient, item);
     };
     item.addEventListener('click', handler);
     item.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') handler(e); });
@@ -738,7 +739,7 @@ async function loadSent() {
 
   const { data, error } = await supabase
     .from('patient_file_transfers')
-    .select('*, patient:patients(first_name, last_name, hospital_number), recipient:profiles(full_name, role, department)')
+    .select('*, patient:patients!patient_file_transfers_patient_id_fkey(first_name, last_name, hospital_number), recipient:profiles!patient_file_transfers_recipient_id_fkey(full_name, role, department)')
     .eq('sender_id', currentProfile.id)
     .order('created_at', { ascending: false });
 
@@ -761,8 +762,8 @@ async function loadSent() {
             ${escapeHtml(name)}
             <span class="text-muted" style="font-weight:400">· ${escapeHtml(patient.hospital_number || '')}</span>
           </div>
-          <div class="list-item-meta">To: ${escapeHtml(recipient.full_name || '—')} (${escapeHtml(recipient.department || '')})</div>
-          ${t.message ? `<div class="list-item-note">${escapeHtml(t.message)}</div>` : ''}
+          <div class="list-item-meta">To: ${escapeHtml(recipient.full_name || '—')} (${escapeHtml(recipient.department || t.to_department || '')})</div>
+          ${t.reason ? `<div class="list-item-note">${escapeHtml(t.reason)}</div>` : ''}
         </div>
         <div class="list-item-aside">
           <span class="badge ${statusClass}">${formatTransferStatus(t.status)}</span>
@@ -777,7 +778,7 @@ async function loadSent() {
       const t = data[i];
       if (t.patient) {
         const { data: patient } = await getPatient(t.patient.id || t.patient_id);
-        if (patient) openPatientChart(patient);
+        if (patient) openPatientChart(patient, item);
       }
     });
   });
@@ -833,7 +834,7 @@ async function loadEncounters() {
       const enc = data[i];
       if (!enc.patient) return;
       const { data: patient } = await getPatient(enc.patient_id || enc.patient?.id);
-      if (patient) openPatientChart(patient);
+      if (patient) openPatientChart(patient, item);
     };
     item.addEventListener('click', handler);
     item.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') handler(); });
@@ -1011,7 +1012,7 @@ async function openPatientChart(patient, triggerBtn = null) {
   // Fetch recent encounters
   const { data: encounters } = await supabase
     .from('patient_encounters')
-    .select('id, encounter_number, department, status, chief_complaint, created_at, opened_by_profile:profiles(full_name)')
+    .select('id, encounter_number, department, status, chief_complaint, created_at, opened_by_profile:profiles!patient_encounters_opened_by_fkey(full_name)')
     .eq('patient_id', fullPatient.id)
     .order('created_at', { ascending: false })
     .limit(5);
@@ -1045,6 +1046,7 @@ async function openPatientChart(patient, triggerBtn = null) {
         ${renderDemoField('Email', fullPatient.email)}
         ${renderDemoField('Address', fullPatient.address)}
         ${renderDemoField('Next of Kin', fullPatient.next_of_kin || fullPatient.next_of_kin_name)}
+        ${renderDemoField('Admin Notes', fullPatient.admin_notes)}
         ${renderDemoField('Emergency Contact', fullPatient.emergency_contact_name)}
         ${renderDemoField('Emergency Phone', fullPatient.emergency_contact_phone)}
         ${renderDemoField('Relationship', fullPatient.emergency_contact_relationship)}
@@ -1110,19 +1112,51 @@ function closeChartPanel() {
   const overlay = document.getElementById('chart-panel-overlay');
   if (!panel) return;
 
-  // Move keyboard focus outside the panel BEFORE setting aria-hidden="true"
-  if (chartPanelTriggerBtn && typeof chartPanelTriggerBtn.focus === 'function' && document.body.contains(chartPanelTriggerBtn)) {
-    chartPanelTriggerBtn.focus();
-  } else if (panel.contains(document.activeElement)) {
-    document.activeElement?.blur();
-  }
+  // ── ACCESSIBILITY: restore focus away from panel BEFORE setting aria-hidden ──
+  const triggerToRestore = chartPanelTriggerBtn;
   chartPanelTriggerBtn = null;
 
+  // 1. Immediately blur anything currently focused inside the panel
+  if (panel.contains(document.activeElement) && typeof document.activeElement.blur === 'function') {
+    document.activeElement.blur();
+  }
+
+  // 2. Determine safe element outside the panel to receive focus
+  let focusTarget = null;
+  if (triggerToRestore && document.body.contains(triggerToRestore) && !panel.contains(triggerToRestore) && typeof triggerToRestore.focus === 'function') {
+    focusTarget = triggerToRestore;
+  } else {
+    focusTarget = document.getElementById('search-patient-input') ||
+                  document.querySelector('main [tabindex="0"], main button:not([disabled]), nav button, header button') ||
+                  document.body;
+  }
+
+  if (focusTarget) {
+    if (focusTarget === document.body && !focusTarget.hasAttribute('tabindex')) {
+      focusTarget.setAttribute('tabindex', '-1');
+    }
+    try {
+      focusTarget.focus();
+    } catch (e) {
+      console.warn('Chart panel focus restore non-fatal warning:', e);
+    }
+  }
+
+  // 3. Guarantee that activeElement is not retained inside the panel
+  if (panel.contains(document.activeElement) && typeof document.activeElement.blur === 'function') {
+    document.activeElement.blur();
+  }
+
+  // 4. Visually hide panel and overlay
   panel.classList.remove('open');
+  if (overlay) {
+    overlay.classList.remove('visible');
+  }
+
+  // 5. Apply aria-hidden and aria-modal states safely
   panel.setAttribute('aria-hidden', 'true');
   panel.setAttribute('aria-modal', 'false');
   if (overlay) {
-    overlay.classList.remove('visible');
     overlay.setAttribute('aria-hidden', 'true');
   }
 }
