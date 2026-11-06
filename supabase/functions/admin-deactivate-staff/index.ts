@@ -22,6 +22,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   handleCors,
+  isAllowedOrigin,
+  corsHeaders,
   jsonResponse,
   errorResponse,
 } from '../_shared/cors.ts';
@@ -49,11 +51,20 @@ const ACTION_MAP = {
 type ActionType = keyof typeof ACTION_MAP;
 
 Deno.serve(async (req: Request): Promise<Response> => {
-  // Handle OPTIONS preflight with corsHeaders
-  const corsPreflight = handleCors(req);
-  if (corsPreflight) return corsPreflight;
+  // -- Immediate CORS preflight handling ----------------------------------------
+  // OPTIONS must be evaluated before auth verification or body parsing.
+  if (req.method === 'OPTIONS') {
+    const corsPreflight = handleCors(req);
+    if (corsPreflight) return corsPreflight;
+    // Safety fallback: guarantee HTTP 200 for allowed origins.
+    const origin = req.headers.get('Origin') || req.headers.get('origin');
+    if (isAllowedOrigin(origin)) {
+      return new Response('ok', { status: 200, headers: corsHeaders(origin) });
+    }
+    return new Response('Forbidden: Origin not allowed', { status: 403 });
+  }
 
-  const requestOrigin = req.headers.get('Origin');
+  const requestOrigin = req.headers.get('Origin') || req.headers.get('origin');
 
   if (req.method !== 'POST') {
     return errorResponse('Method Not Allowed. Expected POST.', 405, undefined, {}, requestOrigin);

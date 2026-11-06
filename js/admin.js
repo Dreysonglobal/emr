@@ -162,7 +162,7 @@ function initUI() {
   });
 
   // Staff view
-  document.getElementById('add-staff-btn')?.addEventListener('click', openAddStaffModal);
+  document.getElementById('add-staff-btn')?.addEventListener('click', function (e) { openAddStaffModal(e.currentTarget); });
   document.getElementById('staff-role-filter')?.addEventListener('change', debounce(() => {
     staffRoleFilter = document.getElementById('staff-role-filter').value;
     loadStaff();
@@ -618,14 +618,16 @@ function renderStaffRow(s) {
 }
 
 // ─── Add Staff Modal ──────────────────────────────────────────────────────────
-function openAddStaffModal() {
+function openAddStaffModal(triggerBtn) {
   const form = document.getElementById('add-staff-form');
   if (form) form.reset();
   const overlay = document.getElementById('add-staff-modal-overlay');
   if (overlay) {
-    overlay.classList.add('active');
+    // Store the trigger element so setupModalClose can return focus to it on close.
+    overlay._triggerElement = triggerBtn || document.getElementById('add-staff-btn') || null;
     overlay.removeAttribute('aria-hidden');
-    // Move focus to first interactive element inside modal
+    overlay.classList.add('active');
+    // Move focus to first interactive element inside the modal.
     const firstInput = overlay.querySelector('input, select, button:not([type="button"])');
     if (firstInput) setTimeout(() => firstInput.focus(), 50);
   }
