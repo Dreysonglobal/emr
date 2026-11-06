@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Nurse Dashboard Controller — Shared Patient Record Workflow
  *
  * Nurses can:

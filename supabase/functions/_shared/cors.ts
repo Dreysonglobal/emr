@@ -1,9 +1,9 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Shared CORS Configuration
  *
  * APP_ORIGIN env var = the production HTTPS origin (set in Supabase dashboard secrets).
- * Must be set to: https://lifeblossom.github.io
+ * Must be set to: https://dreysonglobal.github.io
  *
  * In development, requests from localhost / 127.0.0.1 on any port are also permitted
  * so that Live Server, Vite, or any local dev server can reach the Edge Functions.
@@ -19,7 +19,7 @@
  */
 
 /** Hard-coded production origin — fallback when APP_ORIGIN secret is missing. */
-const PRODUCTION_ORIGIN = 'https://lifeblossom.github.io';
+const PRODUCTION_ORIGIN = 'https://dreysonglobal.github.io';
 
 const appOrigin = Deno.env.get('APP_ORIGIN')?.trim() || PRODUCTION_ORIGIN;
 

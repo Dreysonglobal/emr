@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Shared Clinical API Module
  *
  * Provides unified data access for all dashboards:
@@ -101,7 +101,7 @@ export async function getPatientFile(patientId) {
           prescribing_doctor:profiles!prescriptions_prescribing_doctor_id_fkey(full_name, role),
           items:prescription_items(
             *,
-            medicine:medicine_catalog(medicine_name, generic_name, strength, dosage_form, unit_of_measure)
+            medicine:medicine_catalog(generic_name, brand_name, strength, dosage_form, unit_of_measure)
           )
         `)
         .eq('patient_id', patientId)
@@ -115,7 +115,7 @@ export async function getPatientFile(patientId) {
           pharmacist:profiles!dispensing_records_pharmacist_id_fkey(full_name, role),
           items:dispensing_items(
             *,
-            medicine:medicine_catalog(medicine_name, generic_name, strength, dosage_form),
+            medicine:medicine_catalog(generic_name, brand_name, strength, dosage_form),
             batch:medicine_batches(batch_number, expiry_date)
           )
         `)
@@ -345,7 +345,7 @@ export async function getPrescriptions(patientId, status = null) {
       prescribing_doctor:profiles!prescriptions_prescribing_doctor_id_fkey(full_name, role),
       items:prescription_items(
         *,
-        medicine:medicine_catalog(medicine_name, generic_name, strength, dosage_form, unit_of_measure, available_stock)
+        medicine:medicine_catalog(generic_name, brand_name, strength, dosage_form, unit_of_measure, current_stock)
       )
     `)
     .eq('patient_id', patientId)
@@ -382,7 +382,7 @@ export async function getDispensingRecords(patientId) {
       pharmacist:profiles!dispensing_records_pharmacist_id_fkey(full_name, role),
       items:dispensing_items(
         *,
-        medicine:medicine_catalog(medicine_name, generic_name, strength, dosage_form),
+        medicine:medicine_catalog(generic_name, brand_name, strength, dosage_form),
         batch:medicine_batches(batch_number, expiry_date)
       )
     `)
@@ -442,40 +442,42 @@ export async function createDispensingRecord(recordData, items = []) {
  * This version takes full control with explicit quantity tracking.
  */
 export async function dispenseItems(patientId, encounterId, prescriptionId, dispensingItems, notes) {
-  const { data: { user } } = await supabase.auth.getUser();
+  // Use atomic dispensing transaction function for prescription dispensing
+  if (prescriptionId) {
+    const itemsPayload = dispensingItems.map(item => ({
+      prescription_item_id: item.prescription_item_id,
+      medicine_id: item.medicine_id,
+      batch_id: item.batch_id || null,
+      quantity: item.quantity_dispensed,
+      instructions: item.instructions || item.special_instructions || null,
+    }));
 
-  // 1. Create dispensing record
+    const { data, error } = await supabase.rpc('dispense_prescription_atomic', {
+      p_prescription_id: prescriptionId,
+      p_items: itemsPayload,
+      p_notes: notes || null,
+    });
+
+    if (error) return { data: null, error };
+    return { data: { id: data.dispensing_record_id, ...data }, error: null };
+  }
+
+  // Fallback for direct inventory adjustment without prescription
+  const { data: { user } } = await supabase.auth.getUser();
   const { data: record, error: recErr } = await supabase
     .from('dispensing_records')
     .insert([{
       patient_id: patientId,
       encounter_id: encounterId || null,
-      prescription_id: prescriptionId || null,
       pharmacist_id: user.id,
-      status: 'pending',
+      status: 'completed',
       notes: notes || null,
     }])
     .select()
     .single();
   if (recErr) return { data: null, error: recErr };
 
-  // 2. Process each item
   for (const item of dispensingItems) {
-    // Insert dispensing item
-    const { error: itemErr } = await supabase
-      .from('dispensing_items')
-      .insert([{
-        dispensing_record_id: record.id,
-        prescription_item_id: item.prescription_item_id || null,
-        medicine_id: item.medicine_id,
-        batch_id: item.batch_id || null,
-        quantity_dispensed: item.quantity_dispensed,
-        substitution_reason: item.substitution_reason || null,
-        unit_selling_price: item.unit_selling_price || null,
-      }]);
-    if (itemErr) return { data: record, error: itemErr };
-
-    // Atomic stock deduction
     const { error: stockErr } = await supabase.rpc('deduct_stock', {
       p_medicine_id: item.medicine_id,
       p_batch_id: item.batch_id || null,
@@ -484,35 +486,6 @@ export async function dispenseItems(patientId, encounterId, prescriptionId, disp
       p_performed_by: user.id,
     });
     if (stockErr) return { data: record, error: stockErr };
-
-    // Update quantity_dispensed on prescription item
-    if (item.prescription_item_id) {
-      await supabase.rpc('increment_dispensed_qty', {
-        p_item_id: item.prescription_item_id,
-        p_qty: item.quantity_dispensed,
-      }).then(() => {}); // best-effort
-    }
-  }
-
-  // 3. Mark record completed and update prescription status
-  await supabase
-    .from('dispensing_records')
-    .update({ status: 'completed', dispensed_at: new Date().toISOString() })
-    .eq('id', record.id);
-
-  if (prescriptionId) {
-    // Check if fully dispensed
-    const { data: rxItems } = await supabase
-      .from('prescription_items')
-      .select('quantity, quantity_dispensed')
-      .eq('prescription_id', prescriptionId);
-
-    if (rxItems) {
-      const allDispensed = rxItems.every(i => (i.quantity_dispensed || 0) >= i.quantity);
-      const anyDispensed = rxItems.some(i => (i.quantity_dispensed || 0) > 0);
-      const newStatus = allDispensed ? 'dispensed' : anyDispensed ? 'partially_dispensed' : 'active';
-      await supabase.from('prescriptions').update({ status: newStatus }).eq('id', prescriptionId);
-    }
   }
 
   return { data: record, error: null };
@@ -524,7 +497,7 @@ export async function getMedicineCatalog(activeOnly = true, limit = 200) {
   let query = supabase
     .from('medicine_catalog')
     .select('*')
-    .order('medicine_name', { ascending: true })
+    .order('generic_name', { ascending: true })
     .limit(limit);
   if (activeOnly) query = query.eq('is_active', true);
   return query;
@@ -544,7 +517,7 @@ export async function getInventoryMovements(medicineId = null, limit = 50, offse
     .from('inventory_movements')
     .select(`
       *,
-      medicine:medicine_catalog(medicine_name, generic_name, strength, dosage_form),
+      medicine:medicine_catalog(generic_name, brand_name, strength, dosage_form),
       batch:medicine_batches(batch_number),
       performed_by_profile:profiles!inventory_movements_performed_by_fkey(full_name, role)
     `)

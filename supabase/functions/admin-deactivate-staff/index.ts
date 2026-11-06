@@ -1,8 +1,8 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Edge Function: admin-deactivate-staff
  *
- * SUPABASE PROJECT: yealxvgednecmwnehfrs.supabase.co
+ * SUPABASE PROJECT: lchosyfcjfrkfxtzopcj.supabase.co
  *
  * Privileged operation: Deactivates, suspends, or reactivates a staff account.
  *

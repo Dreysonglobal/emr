@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Doctor Dashboard Controller
  *
  * Handles all views: Overview, Inbox, Patient Chart, Lookup,
@@ -656,7 +656,7 @@ async function loadChartSummary(patient) {
       histEl.innerHTML = encounters.map(enc => `
         <div class="list-item">
           <div class="list-item-body">
-            <div class="list-item-title">${escapeHtml(enc.encounter_type || 'Encounter')}</div>
+            <div class="list-item-title">${escapeHtml(enc.department || enc.encounter_number || 'Encounter')}</div>
             <div class="list-item-meta">${formatDate(enc.created_at, 'datetime')} · Opened by: ${escapeHtml(enc.opened_by_profile?.full_name || '—')}</div>
             ${enc.chief_complaint ? `<div class="list-item-note">CC: ${escapeHtml(enc.chief_complaint)}</div>` : ''}
           </div>
@@ -1154,7 +1154,7 @@ function renderRxCard(rx) {
         <div style="margin-top:.35rem">
           ${items.map(i => `
             <div style="font-size:.82rem;margin-top:.2rem">
-              💊 ${escapeHtml(i.medicine_name)} ${escapeHtml(i.strength || '')} — ${escapeHtml(i.dosage || '')} ${escapeHtml(i.frequency || '')}
+              💊 ${escapeHtml(i.medicine_name || i.generic_name || '')} ${escapeHtml(i.strength || '')} — ${escapeHtml(i.dosage || '')} ${escapeHtml(i.frequency || '')}
             </div>
           `).join('')}
         </div>

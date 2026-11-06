@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Laboratory Technician Dashboard — Shared Patient Record Workflow
  *
  * Lab technicians can:

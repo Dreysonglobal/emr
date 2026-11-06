@@ -1,8 +1,8 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Edge Function: admin-archive-staff
  *
- * SUPABASE PROJECT: yealxvgednecmwnehfrs.supabase.co
+ * SUPABASE PROJECT: lchosyfcjfrkfxtzopcj.supabase.co
  *
  * Privileged operation: Soft-deletes (archives) a staff profile.
  *
@@ -54,7 +54,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return new Response('ok', {
       status: 200,
       headers: {
-        'Access-Control-Allow-Origin': 'https://lifeblossom.github.io',
+        'Access-Control-Allow-Origin': Deno.env.get('APP_ORIGIN')?.trim() || 'https://dreysonglobal.github.io',
         'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
         'Access-Control-Allow-Credentials': 'true',

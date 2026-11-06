@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Patients API Module
  *
  * All patient data access goes through authorized Supabase queries.
@@ -36,8 +36,10 @@ export async function searchPatients(query, page = 1, pageSize = APP_CONFIG.DEFA
   const offset = (page - 1) * pageSize;
   const q = query?.trim() || '';
 
+  // Use the secure patient_demographics view to provide authorized search
+  // for all staff roles without exposing sensitive clinical attributes to front desk.
   let dbQuery = supabase
-    .from('patients')
+    .from('patient_demographics')
     .select('id, hospital_number, first_name, middle_name, last_name, date_of_birth, sex, phone, created_at', { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(offset, offset + pageSize - 1);
@@ -64,6 +66,17 @@ export async function getPatient(patientId) {
     .select('*')
     .eq('id', patientId)
     .single();
+
+  // If access is denied by RLS (e.g. front desk role), fall back to secure demographics view
+  if (error && (error.code === '42501' || error.message?.includes('violates row-level security'))) {
+    const demoRes = await supabase
+      .from('patient_demographics')
+      .select('*')
+      .eq('id', patientId)
+      .single();
+    return demoRes;
+  }
+
   return { data, error };
 }
 
@@ -78,6 +91,16 @@ export async function getPatientByNumber(hospitalNumber) {
     .select('*')
     .eq('hospital_number', hospitalNumber)
     .single();
+
+  if (error && (error.code === '42501' || error.message?.includes('violates row-level security'))) {
+    const demoRes = await supabase
+      .from('patient_demographics')
+      .select('*')
+      .eq('hospital_number', hospitalNumber)
+      .single();
+    return demoRes;
+  }
+
   return { data, error };
 }
 
@@ -95,6 +118,18 @@ export async function updatePatient(patientId, updates) {
     .eq('id', patientId)
     .select()
     .single();
+
+  // If update is denied by RLS (e.g. front desk role), update through secure demographics view
+  if (error && (error.code === '42501' || error.message?.includes('violates row-level security'))) {
+    const demoRes = await supabase
+      .from('patient_demographics')
+      .update(updates)
+      .eq('id', patientId)
+      .select()
+      .single();
+    return demoRes;
+  }
+
   return { data, error };
 }
 
@@ -109,7 +144,7 @@ export async function updatePatient(patientId, updates) {
  */
 export async function checkDuplicatePatient(firstName, lastName, dob, phone) {
   const { data, error } = await supabase
-    .from('patients')
+    .from('patient_demographics')
     .select('id, hospital_number, first_name, middle_name, last_name, date_of_birth, phone')
     .or(`first_name.ilike.${firstName},phone.eq.${phone}`)
     .eq('last_name', lastName)

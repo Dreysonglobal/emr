@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Authentication Module
  *
  * Handles login, logout, password reset, session verification,
@@ -66,7 +66,7 @@ export async function signOut() {
     // Clear any Supabase client session tokens in localStorage if present
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
-      if (key && (key.startsWith('sb-') || key.includes('supabase') || key.startsWith('lbc_'))) {
+      if (key && (key.startsWith('sb-') || key.includes('supabase') || key.startsWith('dgh_') || key.startsWith('lbc_'))) {
         localStorage.removeItem(key);
       }
     }

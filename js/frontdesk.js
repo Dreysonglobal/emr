@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Front Desk Dashboard Controller
  *
  * Handles all views: Overview, Patient Registration, Search,
@@ -258,13 +258,13 @@ async function loadOverview() {
   todayStart.setHours(0, 0, 0, 0);
 
   const [regRes, encRes, totalRes, inboxCount] = await Promise.all([
-    supabase.from('patients')
+    supabase.from('patient_demographics')
       .select('id', { count: 'exact', head: true })
       .gte('created_at', todayStart.toISOString()),
     supabase.from('patient_encounters')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'open'),
-    supabase.from('patients')
+    supabase.from('patient_demographics')
       .select('id', { count: 'exact', head: true }),
     countUnreadInbox(),
   ]);
@@ -283,7 +283,7 @@ async function loadRecentRegistrations() {
   tbody.innerHTML = '<tr><td colspan="6" class="table-loading-cell"><div class="spinner"></div></td></tr>';
 
   const { data, error } = await supabase
-    .from('patients')
+    .from('patient_demographics')
     .select('id, hospital_number, first_name, middle_name, last_name, date_of_birth, sex, created_at')
     .order('created_at', { ascending: false })
     .limit(10);
@@ -337,7 +337,7 @@ function setupRegistrationForm() {
 
     if ((!firstName && !lastName) && !phone) return;
 
-    let query = supabase.from('patients').select('id, hospital_number, first_name, last_name, phone');
+    let query = supabase.from('patient_demographics').select('id, hospital_number, first_name, last_name, phone');
 
     if (firstName && lastName) {
       query = query.ilike('first_name', `%${firstName}%`).ilike('last_name', `%${lastName}%`);
@@ -475,7 +475,7 @@ async function submitRegistration() {
 
   try {
     const { data, error } = await supabase
-      .from('patients')
+      .from('patient_demographics')
       .insert([payload])
       .select()
       .single();
@@ -814,7 +814,7 @@ async function loadEncounters() {
             <span class="text-muted" style="font-weight:400">· ${escapeHtml(patient.hospital_number || '')}</span>
           </div>
           <div class="list-item-meta">
-            ${escapeHtml(enc.encounter_type || 'Encounter')} ·
+            ${escapeHtml(enc.department || enc.encounter_number || 'Encounter')} ·
             Opened by: ${escapeHtml(openedBy.full_name || '—')} ·
             ${formatDate(enc.created_at, 'datetime')}
           </div>
@@ -944,7 +944,7 @@ async function submitOpenEncounter() {
 
   const { error } = await supabase.from('patient_encounters').insert([{
     patient_id: encounterModalPatient.id,
-    encounter_type: 'outpatient',
+    department: currentProfile.department || 'General Outpatient',
     chief_complaint: chiefComplaint || null,
     opened_by: currentProfile.id,
     status: 'open',
@@ -1011,7 +1011,7 @@ async function openPatientChart(patient, triggerBtn = null) {
   // Fetch recent encounters
   const { data: encounters } = await supabase
     .from('patient_encounters')
-    .select('id, encounter_type, status, chief_complaint, created_at, opened_by_profile:profiles(full_name)')
+    .select('id, encounter_number, department, status, chief_complaint, created_at, opened_by_profile:profiles(full_name)')
     .eq('patient_id', fullPatient.id)
     .order('created_at', { ascending: false })
     .limit(5);
@@ -1044,8 +1044,6 @@ async function openPatientChart(patient, triggerBtn = null) {
         ${renderDemoField('Alt. Phone', fullPatient.alt_phone)}
         ${renderDemoField('Email', fullPatient.email)}
         ${renderDemoField('Address', fullPatient.address)}
-        ${renderDemoField('Blood Group', fullPatient.blood_group)}
-        ${renderDemoField('Genotype', fullPatient.genotype)}
         ${renderDemoField('Next of Kin', fullPatient.next_of_kin || fullPatient.next_of_kin_name)}
         ${renderDemoField('Emergency Contact', fullPatient.emergency_contact_name)}
         ${renderDemoField('Emergency Phone', fullPatient.emergency_contact_phone)}
@@ -1062,7 +1060,7 @@ async function openPatientChart(patient, triggerBtn = null) {
         : encounters.map(enc => `
             <div class="list-item" style="padding:.6rem;margin-bottom:.4rem;border-radius:6px;border:1px solid var(--border-color)">
               <div class="list-item-body">
-                <div class="list-item-title" style="font-size:.85rem">${escapeHtml(enc.encounter_type || 'Encounter')}</div>
+                <div class="list-item-title" style="font-size:.85rem">${escapeHtml(enc.department || enc.encounter_number || 'Encounter')}</div>
                 <div class="list-item-meta" style="font-size:.75rem">
                   ${formatDate(enc.created_at, 'datetime')} ·
                   By: ${escapeHtml(enc.opened_by_profile?.full_name || '—')}

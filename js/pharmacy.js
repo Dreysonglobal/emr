@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Pharmacy Dashboard Controller
  *
  * Handles all views: Overview, Inbox, Prescriptions Queue,
@@ -303,11 +303,11 @@ async function loadOverview() {
 
   // Low stock count: medicines where available_stock <= reorder_level
   const { data: lowMeds } = await supabase.from('medicine_catalog')
-    .select('id, medicine_name, available_stock, reorder_level')
+    .select('id, generic_name, brand_name, current_stock, reorder_level')
     .eq('is_active', true)
-    .order('available_stock', { ascending: true });
+    .order('current_stock', { ascending: true });
 
-  const trulyLow = (lowMeds || []).filter(m => (m.available_stock || 0) <= (m.reorder_level || 0));
+  const trulyLow = (lowMeds || []).filter(m => (m.current_stock || 0) <= (m.reorder_level || 0));
   setStatEl('stat-low-stock', trulyLow.length);
 
   // ── Low stock list (top 5) ─────────────────────────────────────────────────
@@ -320,15 +320,15 @@ async function loadOverview() {
     return;
   }
   container.innerHTML = top5.map(m => {
-    const stockColor = (m.available_stock || 0) === 0 ? 'var(--danger)' : 'var(--warning)';
+    const stockColor = (m.current_stock || 0) === 0 ? 'var(--danger)' : 'var(--warning)';
     return `
       <div class="list-item" style="padding:.6rem .75rem">
         <div class="list-item-body">
-          <div class="list-item-title" style="font-size:.9rem">${escapeHtml(m.medicine_name)}</div>
+          <div class="list-item-title" style="font-size:.9rem">${escapeHtml(m.generic_name + (m.brand_name ? ' (' + m.brand_name + ')' : ''))}</div>
           <div class="list-item-meta">Reorder level: ${escapeHtml(String(m.reorder_level || 0))}</div>
         </div>
         <div class="list-item-aside">
-          <span style="font-weight:700;color:${stockColor};font-size:.95rem">${escapeHtml(String(m.available_stock || 0))}</span>
+          <span style="font-weight:700;color:${stockColor};font-size:.95rem">${escapeHtml(String(m.current_stock || 0))}</span>
           <span style="font-size:.75rem;color:var(--text-muted)">in stock</span>
         </div>
       </div>
@@ -482,7 +482,7 @@ async function openPatientPanel(transfer) {
             </div>
             ${(rx.prescription_items || []).map(item => `
               <div style="font-size:.82rem;margin-top:.3rem">
-                💊 <strong>${escapeHtml(item.medicine_name)}</strong> ${escapeHtml(item.strength || '')}
+                💊 <strong>${escapeHtml(item.medicine_name || item.generic_name || '')}</strong> ${escapeHtml(item.strength || '')}
                 — ${escapeHtml(item.dosage || '')} · ${escapeHtml(item.route || '')} · ${escapeHtml(item.frequency || '')}
                 ${item.duration ? `· ${escapeHtml(item.duration)}` : ''}
                 ${item.quantity ? `· Qty: <strong>${escapeHtml(String(item.quantity))}</strong>` : ''}
@@ -567,7 +567,7 @@ function renderRxCard(rx) {
           <div style="margin-top:.4rem">
             ${items.map(item => `
               <div style="font-size:.82rem;margin-top:.25rem">
-                💊 <strong>${escapeHtml(item.medicine_name)}</strong> ${escapeHtml(item.strength || '')}
+                💊 <strong>${escapeHtml(item.medicine_name || item.generic_name || '')}</strong> ${escapeHtml(item.strength || '')}
                 — ${escapeHtml(item.dosage || '')} · ${escapeHtml(item.route || '')} · ${escapeHtml(item.frequency || '')}
                 ${item.duration ? `· ${escapeHtml(item.duration)}` : ''}
                 ${item.quantity ? `· Qty: <strong>${escapeHtml(String(item.quantity))}</strong>` : ''}
@@ -602,10 +602,10 @@ async function loadInventory() {
   let query = supabase.from('medicine_catalog')
     .select('*')
     .eq('is_active', true)
-    .order('medicine_name', { ascending: true });
+    .order('generic_name', { ascending: true });
 
   if (searchTerm) {
-    query = query.or(`medicine_name.ilike.%${searchTerm}%,generic_name.ilike.%${searchTerm}%,sku.ilike.%${searchTerm}%`);
+    query = query.or(`generic_name.ilike.%${searchTerm}%,brand_name.ilike.%${searchTerm}%,sku.ilike.%${searchTerm}%`);
   }
 
   let { data, error } = await query;
@@ -618,9 +618,9 @@ async function loadInventory() {
 
   // Client-side filter for 'low', 'out', 'expiring'
   if (invFilter === 'low') {
-    data = data.filter(m => (m.available_stock || 0) > 0 && (m.available_stock || 0) <= (m.reorder_level || 0));
+    data = data.filter(m => (m.current_stock || 0) > 0 && (m.current_stock || 0) <= (m.reorder_level || 0));
   } else if (invFilter === 'out') {
-    data = data.filter(m => (m.available_stock || 0) === 0);
+    data = data.filter(m => (m.current_stock || 0) === 0);
   } else if (invFilter === 'expiring') {
     const in30 = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const { data: batches } = await supabase.from('medicine_batches')
@@ -654,7 +654,7 @@ async function loadInventory() {
 }
 
 function renderMedicineCard(m) {
-  const stock = m.available_stock || 0;
+  const stock = m.current_stock || 0;
   const reorder = m.reorder_level || 0;
   let stockColor = 'var(--success)';
   let stockLabel = 'In Stock';
@@ -670,7 +670,7 @@ function renderMedicineCard(m) {
     <div class="medicine-card" style="background:var(--bg-primary,#fff);border:1px solid var(--border-color);border-radius:12px;padding:1rem;display:flex;flex-direction:column;gap:.5rem">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem">
         <div>
-          <div style="font-weight:700;font-size:.95rem">${escapeHtml(m.medicine_name)}</div>
+          <div style="font-weight:700;font-size:.95rem">${escapeHtml(m.generic_name + (m.brand_name ? ' (' + m.brand_name + ')' : ''))}</div>
           ${m.generic_name ? `<div style="font-size:.8rem;color:var(--text-muted)">${escapeHtml(m.generic_name)}</div>` : ''}
         </div>
         <span style="background:${stockColor};color:#fff;border-radius:20px;padding:.2rem .6rem;font-size:.72rem;font-weight:600;white-space:nowrap">${stockLabel}</span>
@@ -712,7 +712,7 @@ function openMedicineModal(medicine = null) {
     titleEl.textContent = 'Edit Medicine';
     editIdEl.value      = medicine.id;
     // Populate by field name attrs
-    const fields = ['medicine_name','generic_name','brand_name','strength','dosage_form',
+    const fields = ['generic_name','brand_name','strength','dosage_form',
                     'unit_of_measure','sku','reorder_level','purchase_price','selling_price'];
     fields.forEach(f => {
       const el = form.querySelector(`[name="${f}"]`);
@@ -740,7 +740,7 @@ async function saveMedicine() {
   const unitOfMeasure = form.querySelector('[name="unit_of_measure"]')?.value.trim() || 'units';
 
   const payload = {
-    medicine_name:   medicineName,
+    generic_name:    medicineName,
     generic_name:    form.querySelector('[name="generic_name"]')?.value.trim()    || null,
     brand_name:      form.querySelector('[name="brand_name"]')?.value.trim()      || null,
     strength:        form.querySelector('[name="strength"]')?.value.trim()        || null,
@@ -764,7 +764,7 @@ async function saveMedicine() {
   } else {
     ({ error } = await supabase.from('medicine_catalog').insert([{
       ...payload,
-      available_stock: 0,
+      current_stock: 0,
       created_by: user?.user?.id || null,
     }]));
   }
@@ -792,8 +792,8 @@ function openStockModal(medicine) {
 
   form.reset();
   _stockMedicineId = medicine.id;
-  _stockCurrentQty = medicine.available_stock || 0;
-  if (nameEl) nameEl.textContent = escapeHtml(medicine.medicine_name);
+  _stockCurrentQty = medicine.current_stock || 0;
+  if (nameEl) nameEl.textContent = escapeHtml(medicine.generic_name + (medicine.brand_name ? ' (' + medicine.brand_name + ')' : ''));
   if (medIdEl) medIdEl.value     = medicine.id;
 
   overlay.classList.add('active');
@@ -840,7 +840,7 @@ async function saveStock() {
 
   // 2. Update medicine_catalog.available_stock
   const { error: updateErr } = await supabase.from('medicine_catalog')
-    .update({ available_stock: resultingStock })
+    .update({ current_stock: resultingStock })
     .eq('id', _stockMedicineId);
 
   if (updateErr) { showToast(updateErr.message, 'error'); btn.disabled = false; btn.textContent = 'Save'; return; }
@@ -948,7 +948,7 @@ function renderDispenseRxDetail(rx) {
       <div style="background:var(--bg-secondary,#f8fafc);border-radius:8px;padding:.75rem;margin-bottom:.75rem">
         ${items.map(item => `
           <div style="font-size:.85rem;margin-bottom:.35rem;padding-bottom:.35rem;border-bottom:1px solid var(--border-color)">
-            💊 <strong>${escapeHtml(item.medicine_name)}</strong> ${escapeHtml(item.strength || '')}
+            💊 <strong>${escapeHtml(item.medicine_name || item.generic_name || '')}</strong> ${escapeHtml(item.strength || '')}
             <span style="color:var(--text-muted)">— ${escapeHtml(item.dosage || '')} · ${escapeHtml(item.route || '')} · ${escapeHtml(item.frequency || '')} ${item.duration ? `for ${escapeHtml(item.duration)}` : ''}</span>
             <span style="float:right;font-size:.78rem">
               Ordered: <strong>${escapeHtml(String(item.quantity || 0))}</strong>
@@ -992,7 +992,7 @@ function openDispenseModal(rx, patient) {
         <div class="dispense-item-row" data-item-id="${escapeHtml(item.id)}" style="padding:.75rem;border:1px solid var(--border-color);border-radius:8px;margin-bottom:.6rem">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
             <div style="flex:1">
-              <div style="font-weight:600;font-size:.9rem">💊 ${escapeHtml(item.medicine_name)} ${escapeHtml(item.strength || '')}</div>
+              <div style="font-weight:600;font-size:.9rem">💊 ${escapeHtml(item.medicine_name || item.generic_name || '')} ${escapeHtml(item.strength || '')}</div>
               <div style="font-size:.78rem;color:var(--text-muted)">${escapeHtml(item.dosage || '')} · ${escapeHtml(item.route || '')} · ${escapeHtml(item.frequency || '')} ${item.duration ? `· ${escapeHtml(item.duration)}` : ''}</div>
               <div style="font-size:.78rem;color:var(--text-muted)">Ordered: ${escapeHtml(String(item.quantity || 0))} · Already dispensed: ${escapeHtml(String(item.quantity_dispensed || 0))} · Remaining: <strong>${escapeHtml(String(remaining))}</strong></div>
             </div>
@@ -1000,7 +1000,7 @@ function openDispenseModal(rx, patient) {
               <label style="font-size:.75rem;color:var(--text-muted)">Qty to dispense</label>
               <input type="number" class="form-control dispense-qty-input"
                 data-item-id="${escapeHtml(item.id)}"
-                data-medicine-name="${escapeHtml(item.medicine_name)}"
+                data-medicine-name="${escapeHtml(item.medicine_name || item.generic_name || '' || item.generic_name || '')}"
                 value="${remaining}"
                 min="0"
                 max="${remaining}"
@@ -1022,93 +1022,62 @@ function openDispenseModal(rx, patient) {
 async function confirmDispense() {
   if (!_dispenseRx || !_dispensePatient) return;
 
-  const btn        = document.getElementById('dispense-modal-confirm');
-  const inputs     = document.querySelectorAll('.dispense-qty-input');
-  const { data: user } = await supabase.auth.getUser();
-  const userId     = user?.user?.id;
+  const btn    = document.getElementById('dispense-modal-confirm');
+  const inputs = document.querySelectorAll('.dispense-qty-input');
 
-  // Build dispense list
-  const toDispense = [];
+  // Build atomic dispense items payload
+  const itemsPayload = [];
   inputs.forEach(input => {
     const qty = parseInt(input.value) || 0;
-    if (qty > 0) toDispense.push({ itemId: input.dataset.itemId, qty, medicineName: input.dataset.medicineName });
+    if (qty > 0) {
+      itemsPayload.push({
+        prescription_item_id: input.dataset.itemId,
+        quantity: qty
+      });
+    }
   });
 
-  if (toDispense.length === 0) { showToast('Enter at least one quantity to dispense', 'warning'); return; }
+  if (itemsPayload.length === 0) { showToast('Enter at least one quantity to dispense', 'warning'); return; }
 
   btn.disabled    = true;
   btn.textContent = 'Processing...';
 
-  const items = _dispenseRx.prescription_items || [];
+  try {
+    // Execute atomic dispensing transaction
+    const { data, error } = await supabase.rpc('dispense_prescription_atomic', {
+      p_prescription_id: _dispenseRx.id,
+      p_items: itemsPayload,
+      p_notes: `Dispensed via pharmacy console for patient ${_dispensePatient.hospital_number || 'N/A'}`
+    });
 
-  for (const d of toDispense) {
-    const item       = items.find(i => i.id === d.itemId);
-    if (!item) continue;
-    const newDispensed = (item.quantity_dispensed || 0) + d.qty;
-
-    // Update prescription_item quantity_dispensed
-    const { error: itemErr } = await supabase.from('prescription_items')
-      .update({ quantity_dispensed: newDispensed })
-      .eq('id', d.itemId);
-    if (itemErr) { showToast(`Error updating item: ${itemErr.message}`, 'error'); btn.disabled = false; btn.textContent = 'Confirm Dispense'; return; }
-
-    // Deduct from medicine_catalog available_stock if matching medicine exists
-    const { data: meds } = await supabase.from('medicine_catalog')
-      .select('id, available_stock')
-      .ilike('medicine_name', `%${d.medicineName}%`)
-      .limit(1);
-
-    if (meds && meds.length > 0) {
-      const med            = meds[0];
-      const prevStock      = med.available_stock || 0;
-      const resultingStock = Math.max(0, prevStock - d.qty);
-
-      await supabase.from('medicine_catalog')
-        .update({ available_stock: resultingStock })
-        .eq('id', med.id);
-
-      await supabase.from('inventory_movements').insert([{
-        medicine_id:     med.id,
-        movement_type:   'dispensing',
-        quantity:        d.qty,
-        previous_stock:  prevStock,
-        resulting_stock: resultingStock,
-        reference_id:    _dispenseRx.id,
-        reason:          `Dispensed for RX #${_dispenseRx.prescription_number || _dispenseRx.rx_number || _dispenseRx.id.slice(0, 8)} — Patient: ${_dispensePatient.hospital_number || '—'}`,
-        performed_by:    userId,
-      }]);
+    if (error) {
+      console.error('Atomic dispense error:', error);
+      showToast(`Dispensing failed: ${error.message}`, 'error');
+      btn.disabled    = false;
+      btn.textContent = 'Confirm Dispense';
+      return;
     }
+
+    btn.disabled    = false;
+    btn.textContent = 'Confirm Dispense';
+
+    showToast('Medication dispensed successfully', 'success');
+    document.getElementById('dispense-modal-overlay').classList.remove('active');
+
+    // Refresh relevant views
+    if (currentView === 'prescriptions') loadPrescriptions();
+    if (currentView === 'inventory')     loadInventory();
+    if (currentView === 'overview')      loadOverview();
+
+    // Refresh dispense view search result if visible
+    const dispContainer = document.getElementById('dispense-prescription-detail');
+    if (dispContainer && dispContainer.innerHTML.includes(_dispenseRx.id)) doDispenseSearch();
+  } catch (err) {
+    console.error('Unexpected dispensing error:', err);
+    showToast(`Unexpected error: ${err.message || err}`, 'error');
+    btn.disabled    = false;
+    btn.textContent = 'Confirm Dispense';
   }
-
-  // Update prescription overall status
-  const { data: updatedItems } = await supabase.from('prescription_items')
-    .select('quantity, quantity_dispensed')
-    .eq('prescription_id', _dispenseRx.id);
-
-  let rxStatus = 'dispensed';
-  if (updatedItems) {
-    const allFull = updatedItems.every(i => (i.quantity_dispensed || 0) >= (i.quantity || 0));
-    rxStatus = allFull ? 'dispensed' : 'partially_dispensed';
-  }
-
-  await supabase.from('prescriptions')
-    .update({ status: rxStatus })
-    .eq('id', _dispenseRx.id);
-
-  btn.disabled    = false;
-  btn.textContent = 'Confirm Dispense';
-
-  showToast('Medication dispensed successfully', 'success');
-  document.getElementById('dispense-modal-overlay').classList.remove('active');
-
-  // Refresh relevant views
-  if (currentView === 'prescriptions') loadPrescriptions();
-  if (currentView === 'inventory')     loadInventory();
-  if (currentView === 'overview')      loadOverview();
-
-  // Refresh dispense view search result if visible
-  const dispContainer = document.getElementById('dispense-prescription-detail');
-  if (dispContainer && dispContainer.innerHTML.includes(_dispenseRx.id)) doDispenseSearch();
 }
 
 // ─── Inventory Movements ──────────────────────────────────────────────────────
@@ -1122,7 +1091,7 @@ async function loadMovements() {
   let query = supabase.from('inventory_movements')
     .select(`
       *,
-      medicine:medicine_catalog(medicine_name),
+      medicine:medicine_catalog(generic_name, brand_name),
       performed_by_profile:profiles(full_name)
     `, { count: 'exact' })
     .order('created_at', { ascending: false })

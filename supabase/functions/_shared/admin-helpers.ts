@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Shared Admin Helpers & Security Utilities
  *
  * Provides centralized caller authentication, role enforcement,

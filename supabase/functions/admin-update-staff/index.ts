@@ -1,8 +1,8 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Edge Function: admin-update-staff
  *
- * SUPABASE PROJECT: yealxvgednecmwnehfrs.supabase.co
+ * SUPABASE PROJECT: lchosyfcjfrkfxtzopcj.supabase.co
  *
  * Privileged operation: Updates a staff profile.
  *

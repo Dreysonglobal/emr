@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Public Supabase Configuration
  *
  * These are the PUBLIC (publishable) keys safe for frontend use.
@@ -12,15 +12,16 @@
  * credential in this file or any other frontend/GitHub Pages deployed file.
  */
 
-export const SUPABASE_URL = 'https://yealxvgednecmwnehfrs.supabase.co';
-export const SUPABASE_ANON_KEY = 'sb_publishable_VYswUX9VyLcxCRxaEQefxQ_ZXKIQ-eJ';
+export const SUPABASE_URL = 'https://lchosyfcjfrkfxtzopcj.supabase.co';
+// Replace with your new Dreyson Global Hospital publishable key
+export const SUPABASE_ANON_KEY = 'sb_publishable_TQORHVAekUhf6QvvjtmojA_S2_VWJWr';
 
 /**
  * Application configuration constants
  */
 export const APP_CONFIG = {
-  HOSPITAL_NAME: 'Life Blossom Care and Cure Hospital',
-  HOSPITAL_SHORT_NAME: 'Life Blossom Hospital',
+  HOSPITAL_NAME: 'Dreyson Global Hospital',
+  HOSPITAL_SHORT_NAME: 'Dreyson Global Hospital',
   LOGO_PATH: '../images/logo.png',
   LOGO_PATH_ROOT: './images/logo.png',
 
@@ -64,7 +65,7 @@ export const APP_CONFIG = {
   },
 
   // Edge Function base URL
-  EDGE_FUNCTION_URL: 'https://yealxvgednecmwnehfrs.supabase.co/functions/v1',
+  EDGE_FUNCTION_URL: 'https://lchosyfcjfrkfxtzopcj.supabase.co/functions/v1',
 
   // File upload limits
   MAX_UPLOAD_SIZE_BYTES: 52428800, // 50 MB

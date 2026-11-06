@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Shared Patient File Component
  *
  * Renders the unified patient record across all dashboards.
@@ -1016,7 +1016,7 @@ export class PatientFile {
       itemsContainer.innerHTML = '<p class="loading-text">Loading prescription items…</p>';
       const { data: rx } = await supabase
         .from('prescriptions')
-        .select('*, items:prescription_items(*, medicine:medicine_catalog(id, medicine_name, generic_name, strength, dosage_form, available_stock))')
+        .select('*, items:prescription_items(*, medicine:medicine_catalog(id, medicine_name, generic_name, strength, dosage_form, current_stock))')
         .eq('id', rxId)
         .single();
 
@@ -1026,10 +1026,10 @@ export class PatientFile {
       }
       itemsContainer.innerHTML = rx.items.map((item, idx) => `
         <div class="dispense-item-row" data-rx-item-id="${escapeHtml(item.id)}" data-medicine-id="${escapeHtml(item.medicine_id || '')}">
-          <strong>${escapeHtml(item.medicine_name)} ${item.strength ? escapeHtml(item.strength) : ''}</strong>
+          <strong>${escapeHtml(item.medicine_name || item.generic_name || '')} ${item.strength ? escapeHtml(item.strength) : ''}</strong>
           — ${escapeHtml(item.dosage)}, ${escapeHtml(item.frequency)}
           — Prescribed: ${item.quantity}, Dispensed so far: ${item.quantity_dispensed || 0}
-          ${item.medicine?.available_stock !== undefined ? ` · Stock: ${item.medicine.available_stock}` : ''}
+          ${item.medicine?.current_stock !== undefined ? ` · Stock: ${item.medicine.current_stock}` : ''}
           <div class="form-group">
             <label>Quantity to Dispense *</label>
             <input type="number" class="dispense-qty" min="1" max="${item.quantity - (item.quantity_dispensed || 0)}" 

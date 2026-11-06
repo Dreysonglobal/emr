@@ -2,7 +2,7 @@
 
 ## 1. Supabase database
 
-For a new project, open the Supabase SQL Editor and apply `supabase_setup.sql` once. Then apply the SQL files in `supabase/migrations/` in timestamp order. The setup script is idempotent for its schema objects; keep it as the documented bootstrap for environments that do not yet have migration history.
+For a new project, open the Supabase SQL Editor and apply `supabase/dreyson_global_hospital_setup.sql` once. Then apply the SQL files in `supabase/migrations/` in timestamp order. The setup script is idempotent for its schema objects; keep it as the documented bootstrap for environments that do not yet have migration history.
 
 For an existing project, apply any unapplied files in `supabase/migrations/` before deploying the matching client code. Verify the migration completed without errors, then test RLS using accounts from each role. Do not test with real patient records.
 
@@ -12,12 +12,12 @@ Install the Supabase CLI and authenticate it, then from the project root run:
 
 ```powershell
 supabase login
-supabase link --project-ref yealxvgednecmwnehfrs
-supabase secrets set APP_ORIGIN=https://lifeblossom.github.io
-supabase functions deploy admin-create-staff --project-ref yealxvgednecmwnehfrs
-supabase functions deploy admin-update-staff --project-ref yealxvgednecmwnehfrs
-supabase functions deploy admin-deactivate-staff --project-ref yealxvgednecmwnehfrs
-supabase functions deploy admin-reset-staff-password --project-ref yealxvgednecmwnehfrs
+supabase link --project-ref lchosyfcjfrkfxtzopcj
+supabase secrets set APP_ORIGIN=https://dreysonglobal.github.io
+supabase functions deploy admin-create-staff --project-ref lchosyfcjfrkfxtzopcj
+supabase functions deploy admin-update-staff --project-ref lchosyfcjfrkfxtzopcj
+supabase functions deploy admin-deactivate-staff --project-ref lchosyfcjfrkfxtzopcj
+supabase functions deploy admin-reset-staff-password --project-ref lchosyfcjfrkfxtzopcj
 ```
 
 Set `APP_ORIGIN` to the exact HTTPS origin that hosts the frontend (scheme and hostname, with an optional port; no path or trailing slash). The CORS layer intentionally does not allow all origins. For local development, set the origin to the local web server origin. Never put `SUPABASE_SERVICE_ROLE_KEY` in browser code or the frontend hosting environment.

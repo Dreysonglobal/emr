@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Login Page Controller (js/login.js)
  *
  * Handles the sign-in form, password visibility toggle,

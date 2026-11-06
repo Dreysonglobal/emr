@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Admin Dashboard Controller
  *
  * Handles all admin views: Overview, Staff Management,
@@ -50,7 +50,7 @@ let deleteStaffUserId = null;
 /** The DOM button that triggered the Delete modal — used to restore focus on close. */
 let deleteStaffTriggerBtn = null;
 
-const HIDDEN_STAFF_STORAGE_KEY = 'lbc_hidden_staff_ids';
+const HIDDEN_STAFF_STORAGE_KEY = 'dgh_hidden_staff_ids';
 
 function getHiddenStaffIds() {
   try {

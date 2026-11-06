@@ -1,8 +1,8 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Edge Function: admin-create-staff
  *
- * SUPABASE PROJECT: yealxvgednecmwnehfrs.supabase.co
+ * SUPABASE PROJECT: lchosyfcjfrkfxtzopcj.supabase.co
  *
  * Privileged operation: Creates a new staff member account (Auth user + profile).
  * Logic:

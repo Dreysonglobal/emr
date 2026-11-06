@@ -1,8 +1,8 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Edge Function: admin-reset-staff-password
  *
- * SUPABASE PROJECT: yealxvgednecmwnehfrs.supabase.co
+ * SUPABASE PROJECT: lchosyfcjfrkfxtzopcj.supabase.co
  *
  * Privileged operation: Sends a password reset email to a staff member.
  *

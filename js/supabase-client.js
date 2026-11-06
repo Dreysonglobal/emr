@@ -1,5 +1,5 @@
 /**
- * Life Blossom Care and Cure Hospital — EMR System
+ * Dreyson Global Hospital — EMR System
  * Supabase Client Initialization
  *
  * Uses the pinned Supabase JS v2 client for stability.
