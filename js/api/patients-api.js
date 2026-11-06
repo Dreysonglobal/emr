@@ -2,26 +2,65 @@
  * Dreyson Global Hospital — EMR System
  * Patients API Module
  *
- * All patient data access goes through authorized Supabase queries.
- * RLS policies on the database enforce access control.
+ * All patient demographic operations go through authorized Supabase queries.
+ * Front Desk staff access patient demographic records through the secure
+ * `public.patient_demographics` view (19 columns):
+ *   - id, hospital_number, first_name, last_name, middle_name, date_of_birth,
+ *     sex, phone, address, emergency_contact_name, emergency_contact_relationship,
+ *     emergency_contact_phone, registered_by, created_at, updated_at,
+ *     alt_phone, email, next_of_kin, admin_notes
+ *
+ * Direct table access to `public.patients` is reserved for clinical staff needing
+ * sensitive fields (blood_group, genotype, allergies_summary).
  */
 
 import { supabase } from '../supabase-client.js';
 import { APP_CONFIG } from '../config.js';
 
+export const PATIENT_DEMOGRAPHIC_COLUMNS = [
+  'id',
+  'hospital_number',
+  'first_name',
+  'last_name',
+  'middle_name',
+  'date_of_birth',
+  'sex',
+  'phone',
+  'address',
+  'emergency_contact_name',
+  'emergency_contact_relationship',
+  'emergency_contact_phone',
+  'registered_by',
+  'created_at',
+  'updated_at',
+  'alt_phone',
+  'email',
+  'next_of_kin',
+  'admin_notes',
+].join(', ');
+
 /**
  * Register a new patient.
- * Only front_desk and admin roles can do this (enforced by RLS).
+ * Inserts through patient_demographics view which triggers trg_patient_demographics_insert.
+ * Falls back to patients table for administrator role if needed.
  * @param {Object} patientData
  * @returns {Promise<{data, error}>}
  */
 export async function registerPatient(patientData) {
-  const { data, error } = await supabase
-    .from('patients')
+  let res = await supabase
+    .from('patient_demographics')
     .insert([patientData])
     .select()
     .single();
-  return { data, error };
+
+  if (res.error && (res.error.code === '42501' || res.error.message?.includes('violates row-level security'))) {
+    res = await supabase
+      .from('patients')
+      .insert([patientData])
+      .select()
+      .single();
+  }
+  return res;
 }
 
 /**
@@ -36,48 +75,68 @@ export async function searchPatients(query, page = 1, pageSize = APP_CONFIG.DEFA
   const offset = (page - 1) * pageSize;
   const q = query?.trim() || '';
 
-  // Use the secure patient_demographics view to provide authorized search
-  // for all staff roles without exposing sensitive clinical attributes to front desk.
   let dbQuery = supabase
     .from('patient_demographics')
-    .select('id, hospital_number, first_name, middle_name, last_name, date_of_birth, sex, phone, created_at', { count: 'exact' })
+    .select(PATIENT_DEMOGRAPHIC_COLUMNS, { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(offset, offset + pageSize - 1);
 
   if (q) {
-    // Use ilike for case-insensitive search on multiple fields
     dbQuery = dbQuery.or(
-      `hospital_number.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%,phone.ilike.%${q}%`
+      `hospital_number.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%,phone.ilike.%${q}%,alt_phone.ilike.%${q}%,email.ilike.%${q}%`
     );
   }
 
   const { data, count, error } = await dbQuery;
+
+  // Fallback to patients table for authorized clinical staff searching newly registered patients
+  if (!error && (!data || data.length === 0)) {
+    let altQuery = supabase
+      .from('patients')
+      .select('id, hospital_number, first_name, middle_name, last_name, date_of_birth, sex, phone, alt_phone, email, address, emergency_contact_name, emergency_contact_relationship, emergency_contact_phone, registered_by, created_at, updated_at, next_of_kin, admin_notes', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+
+    if (q) {
+      altQuery = altQuery.or(
+        `hospital_number.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%,phone.ilike.%${q}%,alt_phone.ilike.%${q}%,email.ilike.%${q}%`
+      );
+    }
+    const altRes = await altQuery;
+    if (altRes.data && altRes.data.length > 0) {
+      return altRes;
+    }
+  }
+
   return { data, count, error };
 }
 
 /**
  * Get a single patient by ID.
+ * Tries the secure patient_demographics view first, falling back to patients
+ * table for authorized clinical staff who require full medical history.
  * @param {string} patientId
  * @returns {Promise<{data, error}>}
  */
 export async function getPatient(patientId) {
-  const { data, error } = await supabase
+  const demoRes = await supabase
+    .from('patient_demographics')
+    .select(PATIENT_DEMOGRAPHIC_COLUMNS)
+    .eq('id', patientId)
+    .maybeSingle();
+
+  if (demoRes.data && !demoRes.error) {
+    return { data: demoRes.data, error: null };
+  }
+
+  // Fallback to full patients table (for doctor/nurse roles needing blood_group, genotype)
+  const fullRes = await supabase
     .from('patients')
     .select('*')
     .eq('id', patientId)
-    .single();
+    .maybeSingle();
 
-  // If access is denied by RLS (e.g. front desk role), fall back to secure demographics view
-  if (error && (error.code === '42501' || error.message?.includes('violates row-level security'))) {
-    const demoRes = await supabase
-      .from('patient_demographics')
-      .select('*')
-      .eq('id', patientId)
-      .single();
-    return demoRes;
-  }
-
-  return { data, error };
+  return fullRes;
 }
 
 /**
@@ -86,56 +145,54 @@ export async function getPatient(patientId) {
  * @returns {Promise<{data, error}>}
  */
 export async function getPatientByNumber(hospitalNumber) {
-  const { data, error } = await supabase
+  const demoRes = await supabase
+    .from('patient_demographics')
+    .select(PATIENT_DEMOGRAPHIC_COLUMNS)
+    .eq('hospital_number', hospitalNumber)
+    .maybeSingle();
+
+  if (demoRes.data && !demoRes.error) {
+    return { data: demoRes.data, error: null };
+  }
+
+  const fullRes = await supabase
     .from('patients')
     .select('*')
     .eq('hospital_number', hospitalNumber)
-    .single();
+    .maybeSingle();
 
-  if (error && (error.code === '42501' || error.message?.includes('violates row-level security'))) {
-    const demoRes = await supabase
-      .from('patient_demographics')
-      .select('*')
-      .eq('hospital_number', hospitalNumber)
-      .single();
-    return demoRes;
-  }
-
-  return { data, error };
+  return fullRes;
 }
 
 /**
  * Update patient demographic information.
- * Only permitted fields (enforced by RLS column-level policies).
+ * Uses patient_demographics view which triggers trg_patient_demographics_update.
  * @param {string} patientId
  * @param {Object} updates
  * @returns {Promise<{data, error}>}
  */
 export async function updatePatient(patientId, updates) {
-  const { data, error } = await supabase
-    .from('patients')
+  let demoRes = await supabase
+    .from('patient_demographics')
     .update(updates)
     .eq('id', patientId)
     .select()
     .single();
 
-  // If update is denied by RLS (e.g. front desk role), update through secure demographics view
-  if (error && (error.code === '42501' || error.message?.includes('violates row-level security'))) {
-    const demoRes = await supabase
-      .from('patient_demographics')
+  if (demoRes.error && (demoRes.error.code === '42501' || demoRes.error.message?.includes('violates row-level security'))) {
+    demoRes = await supabase
+      .from('patients')
       .update(updates)
       .eq('id', patientId)
       .select()
       .single();
-    return demoRes;
   }
 
-  return { data, error };
+  return demoRes;
 }
 
 /**
  * Check for potential duplicate patients (by name + DOB + phone).
- * Returns possible matches — does not auto-merge or create records.
  * @param {string} firstName
  * @param {string} lastName
  * @param {string} dob
@@ -145,7 +202,7 @@ export async function updatePatient(patientId, updates) {
 export async function checkDuplicatePatient(firstName, lastName, dob, phone) {
   const { data, error } = await supabase
     .from('patient_demographics')
-    .select('id, hospital_number, first_name, middle_name, last_name, date_of_birth, phone')
+    .select('id, hospital_number, first_name, middle_name, last_name, date_of_birth, phone, alt_phone')
     .or(`first_name.ilike.${firstName},phone.eq.${phone}`)
     .eq('last_name', lastName)
     .limit(5);

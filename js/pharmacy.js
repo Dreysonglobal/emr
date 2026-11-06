@@ -605,7 +605,7 @@ async function loadInventory() {
     .order('generic_name', { ascending: true });
 
   if (searchTerm) {
-    query = query.or(`generic_name.ilike.%${searchTerm}%,brand_name.ilike.%${searchTerm}%,sku.ilike.%${searchTerm}%`);
+    query = query.or(`generic_name.ilike.%${searchTerm}%,brand_name.ilike.%${searchTerm}%`);
   }
 
   let { data, error } = await query;
@@ -688,7 +688,7 @@ function renderMedicineCard(m) {
           <div style="font-weight:600;font-size:.95rem">${escapeHtml(String(reorder))}</div>
         </div>
       </div>
-      <div style="font-size:.78rem;color:var(--text-muted)">SKU: ${escapeHtml(m.sku || '—')}</div>
+      <div style="font-size:.78rem;color:var(--text-muted)">Price: ₦${Number(m.unit_price || 0).toFixed(2)}</div>
       <div style="display:flex;gap:.5rem;margin-top:.25rem">
         <button class="btn btn-ghost btn-xs edit-medicine-btn" data-id="${escapeHtml(m.id)}" style="flex:1">✏️ Edit</button>
         <button class="btn btn-primary btn-xs receive-stock-btn" data-id="${escapeHtml(m.id)}" style="flex:1">📦 Receive Stock</button>
@@ -712,12 +712,15 @@ function openMedicineModal(medicine = null) {
     titleEl.textContent = 'Edit Medicine';
     editIdEl.value      = medicine.id;
     // Populate by field name attrs
-    const fields = ['generic_name','brand_name','strength','dosage_form',
-                    'unit_of_measure','sku','reorder_level','purchase_price','selling_price'];
+    const fields = ['generic_name','brand_name','strength','dosage_form','reorder_level'];
     fields.forEach(f => {
       const el = form.querySelector(`[name="${f}"]`);
       if (el && medicine[f] != null) el.value = medicine[f];
     });
+    const medNameEl = form.querySelector('[name="medicine_name"]');
+    if (medNameEl) medNameEl.value = medicine.generic_name || medicine.brand_name || '';
+    const priceEl = form.querySelector('[name="selling_price"]');
+    if (priceEl && medicine.unit_price != null) priceEl.value = medicine.unit_price;
   } else {
     titleEl.textContent = 'Add Medicine';
   }
@@ -739,33 +742,36 @@ async function saveMedicine() {
 
   const unitOfMeasure = form.querySelector('[name="unit_of_measure"]')?.value.trim() || 'units';
 
+  const genericName = form.querySelector('[name="generic_name"]')?.value.trim() || medicineName;
+  const brandName = form.querySelector('[name="brand_name"]')?.value.trim() || null;
+  const strength = form.querySelector('[name="strength"]')?.value.trim() || 'Standard';
+  const reorderLevel = parseInt(form.querySelector('[name="reorder_level"]')?.value, 10);
+  const sellingPrice = parseFloat(form.querySelector('[name="selling_price"]')?.value);
+  const purchasePrice = parseFloat(form.querySelector('[name="purchase_price"]')?.value);
+  const unitPrice = !isNaN(sellingPrice) ? sellingPrice : (!isNaN(purchasePrice) ? purchasePrice : null);
+
   const payload = {
-    generic_name:    medicineName,
-    generic_name:    form.querySelector('[name="generic_name"]')?.value.trim()    || null,
-    brand_name:      form.querySelector('[name="brand_name"]')?.value.trim()      || null,
-    strength:        form.querySelector('[name="strength"]')?.value.trim()        || null,
-    dosage_form:     dosageForm,
-    unit_of_measure: unitOfMeasure,
-    sku:             form.querySelector('[name="sku"]')?.value.trim()             || null,
-    reorder_level:   parseInt(form.querySelector('[name="reorder_level"]')?.value) || 10,
-    purchase_price:  parseFloat(form.querySelector('[name="purchase_price"]')?.value) || 0.00,
-    selling_price:   parseFloat(form.querySelector('[name="selling_price"]')?.value)  || 0.00,
-    is_active:       true,
+    generic_name: genericName,
+    brand_name: brandName,
+    dosage_form: dosageForm,
+    strength: strength,
+    reorder_level: !isNaN(reorderLevel) && reorderLevel >= 0 ? reorderLevel : 50,
+    unit_price: unitPrice != null && unitPrice >= 0 ? unitPrice : 0.00,
+    requires_prescription: true,
+    is_active: true,
   };
 
   btn.disabled    = true;
   btn.textContent = 'Saving...';
 
-  const { data: user } = await supabase.auth.getUser();
-
   let error;
   if (editId) {
+    payload.updated_at = new Date().toISOString();
     ({ error } = await supabase.from('medicine_catalog').update(payload).eq('id', editId));
   } else {
     ({ error } = await supabase.from('medicine_catalog').insert([{
       ...payload,
       current_stock: 0,
-      created_by: user?.user?.id || null,
     }]));
   }
 
@@ -827,35 +833,32 @@ async function saveStock() {
   const { data: batch, error: batchErr } = await supabase.from('medicine_batches').insert([{
     medicine_id:        _stockMedicineId,
     batch_number:       batchNumber,
-    quantity:           quantity,
-    manufacture_date:   manufactDate || null,
+    quantity_received:  quantity,
+    quantity_remaining: quantity,
     expiry_date:        expiryDate,
-    purchase_price:     purchasePrice,
-    supplier_name:      supplierName,
-    received_by:        userId,
-    received_at:        new Date().toISOString(),
+    cost_price:         purchasePrice,
+    received_date:      manufactDate || new Date().toISOString().split('T')[0],
   }]).select().single();
 
   if (batchErr) { showToast(batchErr.message, 'error'); btn.disabled = false; btn.textContent = 'Save'; return; }
 
-  // 2. Update medicine_catalog.available_stock
+  // 2. Update medicine_catalog.current_stock
   const { error: updateErr } = await supabase.from('medicine_catalog')
-    .update({ current_stock: resultingStock })
+    .update({ current_stock: resultingStock, updated_at: new Date().toISOString() })
     .eq('id', _stockMedicineId);
 
   if (updateErr) { showToast(updateErr.message, 'error'); btn.disabled = false; btn.textContent = 'Save'; return; }
 
   // 3. Insert inventory_movement
   await supabase.from('inventory_movements').insert([{
-    medicine_id:     _stockMedicineId,
-    batch_id:        batch?.id || null,
-    movement_type:   'stock_receipt',
-    quantity:        quantity,
-    previous_stock:  previousStock,
-    resulting_stock: resultingStock,
-    unit_purchase_cost: purchasePrice,
-    reason:          `Batch: ${batchNumber}${supplierName ? ` from ${supplierName}` : ''}`,
-    performed_by:    userId,
+    medicine_id:      _stockMedicineId,
+    batch_id:         batch?.id || null,
+    movement_type:    'stock_receipt',
+    quantity:         quantity,
+    previous_balance: previousStock,
+    new_balance:      resultingStock,
+    notes:            `Batch: ${batchNumber}${supplierName ? ` from ${supplierName}` : ''}`,
+    performed_by:     userId,
   }]);
 
   btn.disabled    = false;

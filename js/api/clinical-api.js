@@ -54,14 +54,32 @@ export async function getPatientVitals(patientId, encounterId) {
  * @returns {Promise<{data, error}>}
  */
 export async function createNote(noteData) {
+  const { data: userRes } = await supabase.auth.getUser();
+  const userId = userRes?.user?.id;
+  const payload = {
+    patient_id: noteData.patient_id,
+    encounter_id: noteData.encounter_id || null,
+    author_id: noteData.author_id || noteData.author || userId,
+    note_type: noteData.note_type || 'clinical',
+    raw_note: noteData.raw_note || noteData.content || '',
+    subjective: noteData.subjective || null,
+    objective: noteData.objective || null,
+    assessment: noteData.assessment || null,
+    plan: noteData.plan || null,
+  };
+
   const { data, error } = await supabase
     .from('clinical_notes')
-    .insert([noteData])
+    .insert([payload])
     .select(`
       *,
-      author_profile:profiles!clinical_notes_author_fkey(full_name, role)
+      author_profile:profiles!clinical_notes_author_id_fkey(full_name, role)
     `)
     .single();
+
+  if (data && !data.content) {
+    data.content = data.raw_note || data.assessment || '';
+  }
   return { data, error };
 }
 
@@ -77,8 +95,8 @@ export async function getPatientNotes(patientId, encounterId, noteType) {
     .from('clinical_notes')
     .select(`
       *,
-      author_profile:profiles!clinical_notes_author_fkey(id, full_name, role),
-      signed_by_profile:profiles!clinical_notes_signed_by_fkey(full_name, role)
+      author_profile:profiles!clinical_notes_author_id_fkey(id, full_name, role),
+      amended_by_profile:profiles!clinical_notes_amended_by_fkey(full_name, role)
     `)
     .eq('patient_id', patientId)
     .order('created_at', { ascending: false });
@@ -87,6 +105,12 @@ export async function getPatientNotes(patientId, encounterId, noteType) {
   if (noteType)    query = query.eq('note_type', noteType);
 
   const { data, error } = await query;
+  if (data) {
+    data.forEach(n => {
+      if (!n.content) n.content = n.raw_note || n.assessment || '';
+      n.signed_by_profile = n.amended_by_profile;
+    });
+  }
   return { data, error };
 }
 
@@ -97,17 +121,13 @@ export async function getPatientNotes(patientId, encounterId, noteType) {
  * @returns {Promise<{data, error}>}
  */
 export async function signNote(noteId) {
-  const { data: { user } } = await supabase.auth.getUser();
-
   const { data, error } = await supabase
     .from('clinical_notes')
     .update({
-      is_signed: true,
-      signed_at: new Date().toISOString(),
-      signed_by: user.id,
+      is_amended: false,
+      updated_at: new Date().toISOString(),
     })
     .eq('id', noteId)
-    .eq('is_signed', false) // only unsigned
     .select()
     .single();
 
@@ -124,9 +144,8 @@ export async function signNote(noteId) {
 export async function updateNote(noteId, content) {
   const { data, error } = await supabase
     .from('clinical_notes')
-    .update({ content })
+    .update({ raw_note: content, updated_at: new Date().toISOString() })
     .eq('id', noteId)
-    .eq('is_signed', false) // RLS also enforces this
     .select()
     .single();
 
@@ -149,11 +168,11 @@ export async function createNoteAmendment(originalNoteId, patientId, encounterId
     .from('clinical_notes')
     .insert([{
       patient_id: patientId,
-      encounter_id: encounterId,
+      encounter_id: encounterId || null,
       note_type: 'amendment',
-      content,
-      author: user.id,
-      original_note_id: originalNoteId,
+      raw_note: content,
+      author_id: user.id,
+      amendment_reason: `Amendment to note ${originalNoteId}`,
     }])
     .select()
     .single();
@@ -169,11 +188,32 @@ export async function createNoteAmendment(originalNoteId, patientId, encounterId
  * @returns {Promise<{data, error}>}
  */
 export async function addDiagnosis(diagnosisData) {
+  const { data: userRes } = await supabase.auth.getUser();
+  const userId = userRes?.user?.id;
+  const payload = {
+    patient_id: diagnosisData.patient_id,
+    encounter_id: diagnosisData.encounter_id || null,
+    diagnosed_by: diagnosisData.diagnosed_by || diagnosisData.recorded_by || userId,
+    diagnosis_name: diagnosisData.diagnosis_name,
+    diagnosis_type: diagnosisData.diagnosis_type || 'provisional',
+    icd10_code: diagnosisData.icd10_code || diagnosisData.icd_code || diagnosisData.diagnosis_code || null,
+    notes: diagnosisData.notes || null,
+  };
+
   const { data, error } = await supabase
     .from('patient_diagnoses')
-    .insert([diagnosisData])
-    .select()
+    .insert([payload])
+    .select(`
+      *,
+      diagnosed_by_profile:profiles!patient_diagnoses_diagnosed_by_fkey(full_name, role)
+    `)
     .single();
+
+  if (data) {
+    data.recorded_by_profile = data.diagnosed_by_profile;
+    data.icd_code = data.icd10_code;
+    data.diagnosis_code = data.icd10_code;
+  }
   return { data, error };
 }
 
@@ -188,7 +228,7 @@ export async function getPatientDiagnoses(patientId, encounterId) {
     .from('patient_diagnoses')
     .select(`
       *,
-      recorded_by_profile:profiles!patient_diagnoses_recorded_by_fkey(full_name)
+      diagnosed_by_profile:profiles!patient_diagnoses_diagnosed_by_fkey(full_name, role)
     `)
     .eq('patient_id', patientId)
     .order('created_at', { ascending: false });
@@ -196,5 +236,12 @@ export async function getPatientDiagnoses(patientId, encounterId) {
   if (encounterId) query = query.eq('encounter_id', encounterId);
 
   const { data, error } = await query;
+  if (data) {
+    data.forEach(d => {
+      d.recorded_by_profile = d.diagnosed_by_profile;
+      d.icd_code = d.icd10_code;
+      d.diagnosis_code = d.icd10_code;
+    });
+  }
   return { data, error };
 }

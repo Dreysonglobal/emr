@@ -38,7 +38,7 @@ export async function getPatientFile(patientId) {
         .from('patients')
         .select('*, registered_by_profile:profiles!patients_registered_by_fkey(full_name, role)')
         .eq('id', patientId)
-        .single(),
+        .maybeSingle(),
 
       // Encounters
       supabase
@@ -58,14 +58,14 @@ export async function getPatientFile(patientId) {
       // Clinical notes (doctor + nursing)
       supabase
         .from('clinical_notes')
-        .select('*, author_profile:profiles!clinical_notes_author_fkey(full_name, role)')
+        .select('*, author_profile:profiles!clinical_notes_author_id_fkey(full_name, role)')
         .eq('patient_id', patientId)
         .order('created_at', { ascending: false }),
 
       // Diagnoses
       supabase
         .from('patient_diagnoses')
-        .select('*, recorded_by_profile:profiles!patient_diagnoses_recorded_by_fkey(full_name, role)')
+        .select('*, diagnosed_by_profile:profiles!patient_diagnoses_diagnosed_by_fkey(full_name, role)')
         .eq('patient_id', patientId)
         .order('created_at', { ascending: false }),
 
@@ -87,7 +87,7 @@ export async function getPatientFile(patientId) {
           results:laboratory_results(
             *,
             performed_by_profile:profiles!laboratory_results_performed_by_fkey(full_name, role),
-            finalized_by_profile:profiles!laboratory_results_finalized_by_fkey(full_name, role)
+            verified_by_profile:profiles!laboratory_results_verified_by_fkey(full_name, role)
           )
         `)
         .eq('patient_id', patientId)
@@ -101,7 +101,7 @@ export async function getPatientFile(patientId) {
           prescribing_doctor:profiles!prescriptions_prescribing_doctor_id_fkey(full_name, role),
           items:prescription_items(
             *,
-            medicine:medicine_catalog(generic_name, brand_name, strength, dosage_form, unit_of_measure)
+            medicine:medicine_catalog(generic_name, brand_name, strength, dosage_form)
           )
         `)
         .eq('patient_id', patientId)
@@ -123,23 +123,60 @@ export async function getPatientFile(patientId) {
         .order('created_at', { ascending: false }),
     ]);
 
-    // Collect any errors (RLS denials return empty arrays, not errors)
-    const firstError = [
-      patientRes, encountersRes, vitalsRes, notesRes,
+    // Fallback patient lookup via patient_demographics if patients table query was restricted
+    let patient = patientRes.data;
+    if (!patient) {
+      const demoRes = await supabase
+        .from('patient_demographics')
+        .select('*')
+        .eq('id', patientId)
+        .maybeSingle();
+      if (demoRes.data) {
+        patient = demoRes.data;
+      }
+    }
+
+    // Collect any non-RLS errors
+    const nonPatientErrors = [
+      encountersRes, vitalsRes, notesRes,
       diagnosesRes, allergiesRes, labOrdersRes,
       prescriptionsRes, dispensingRes,
     ].find(r => r.error)?.error;
 
-    if (firstError) return { error: firstError };
+    if (nonPatientErrors && !patient) return { error: nonPatientErrors };
+
+    // Format diagnoses with backward-compatible aliases
+    const diagnoses = (diagnosesRes.data || []).map(d => ({
+      ...d,
+      recorded_by_profile: d.diagnosed_by_profile,
+      icd_code: d.icd10_code,
+      diagnosis_code: d.icd10_code,
+    }));
+
+    // Format notes with content alias
+    const notes = (notesRes.data || []).map(n => ({
+      ...n,
+      content: n.raw_note || n.assessment || n.content || '',
+    }));
+
+    // Format lab results with finalized_by_profile alias
+    const labOrders = (labOrdersRes.data || []).map(order => ({
+      ...order,
+      results: (order.results || []).map(r => ({
+        ...r,
+        finalized_by_profile: r.verified_by_profile,
+        comments: r.findings || r.comments,
+      })),
+    }));
 
     return {
-      patient: patientRes.data,
+      patient: patient || patientRes.data,
       encounters: encountersRes.data || [],
       vitals: vitalsRes.data || [],
-      notes: notesRes.data || [],
-      diagnoses: diagnosesRes.data || [],
+      notes,
+      diagnoses,
       allergies: allergiesRes.data || [],
-      labOrders: labOrdersRes.data || [],
+      labOrders,
       prescriptions: prescriptionsRes.data || [],
       dispensing: dispensingRes.data || [],
       error: null,
@@ -175,27 +212,47 @@ export async function recordVitals(vitalsData) {
 export async function getPatientNotes(patientId, noteType = null) {
   let query = supabase
     .from('clinical_notes')
-    .select('*, author_profile:profiles!clinical_notes_author_fkey(full_name, role)')
+    .select('*, author_profile:profiles!clinical_notes_author_id_fkey(full_name, role)')
     .eq('patient_id', patientId)
     .order('created_at', { ascending: false });
   if (noteType) query = query.eq('note_type', noteType);
-  return query;
+  const res = await query;
+  if (res.data) {
+    res.data.forEach(n => {
+      if (!n.content) n.content = n.raw_note || n.assessment || '';
+    });
+  }
+  return res;
 }
 
 export async function createNote(noteData) {
   const { data: { user } } = await supabase.auth.getUser();
-  return supabase
+  const payload = {
+    patient_id: noteData.patient_id,
+    encounter_id: noteData.encounter_id || null,
+    author_id: noteData.author_id || noteData.author || user.id,
+    note_type: noteData.note_type || 'clinical',
+    raw_note: noteData.raw_note || noteData.content || '',
+    subjective: noteData.subjective || null,
+    objective: noteData.objective || null,
+    assessment: noteData.assessment || null,
+    plan: noteData.plan || null,
+  };
+  const res = await supabase
     .from('clinical_notes')
-    .insert([{ ...noteData, author: user.id }])
-    .select('*, author_profile:profiles!clinical_notes_author_fkey(full_name, role)')
+    .insert([payload])
+    .select('*, author_profile:profiles!clinical_notes_author_id_fkey(full_name, role)')
     .single();
+  if (res.data && !res.data.content) {
+    res.data.content = res.data.raw_note || res.data.assessment || '';
+  }
+  return res;
 }
 
 export async function signNote(noteId) {
-  const { data: { user } } = await supabase.auth.getUser();
   return supabase
     .from('clinical_notes')
-    .update({ is_signed: true, signed_at: new Date().toISOString(), signed_by: user.id })
+    .update({ is_amended: false, updated_at: new Date().toISOString() })
     .eq('id', noteId)
     .select()
     .single();
@@ -204,20 +261,43 @@ export async function signNote(noteId) {
 // ─── Diagnoses ────────────────────────────────────────────────────────────────
 
 export async function getPatientDiagnoses(patientId) {
-  return supabase
+  const res = await supabase
     .from('patient_diagnoses')
-    .select('*, recorded_by_profile:profiles!patient_diagnoses_recorded_by_fkey(full_name, role)')
+    .select('*, diagnosed_by_profile:profiles!patient_diagnoses_diagnosed_by_fkey(full_name, role)')
     .eq('patient_id', patientId)
     .order('created_at', { ascending: false });
+  if (res.data) {
+    res.data.forEach(d => {
+      d.recorded_by_profile = d.diagnosed_by_profile;
+      d.icd_code = d.icd10_code;
+      d.diagnosis_code = d.icd10_code;
+    });
+  }
+  return res;
 }
 
 export async function addDiagnosis(diagnosisData) {
   const { data: { user } } = await supabase.auth.getUser();
-  return supabase
+  const payload = {
+    patient_id: diagnosisData.patient_id,
+    encounter_id: diagnosisData.encounter_id || null,
+    diagnosed_by: diagnosisData.diagnosed_by || diagnosisData.recorded_by || user.id,
+    diagnosis_name: diagnosisData.diagnosis_name,
+    diagnosis_type: diagnosisData.diagnosis_type || 'provisional',
+    icd10_code: diagnosisData.icd10_code || diagnosisData.icd_code || diagnosisData.diagnosis_code || null,
+    notes: diagnosisData.notes || null,
+  };
+  const res = await supabase
     .from('patient_diagnoses')
-    .insert([{ ...diagnosisData, recorded_by: user.id }])
-    .select()
+    .insert([payload])
+    .select('*, diagnosed_by_profile:profiles!patient_diagnoses_diagnosed_by_fkey(full_name, role)')
     .single();
+  if (res.data) {
+    res.data.recorded_by_profile = res.data.diagnosed_by_profile;
+    res.data.icd_code = res.data.icd10_code;
+    res.data.diagnosis_code = res.data.icd10_code;
+  }
+  return res;
 }
 
 // ─── Lab Orders ───────────────────────────────────────────────────────────────
@@ -233,13 +313,24 @@ export async function getLabOrders(patientId, status = null) {
       results:laboratory_results(
         *,
         performed_by_profile:profiles!laboratory_results_performed_by_fkey(full_name, role),
-        finalized_by_profile:profiles!laboratory_results_finalized_by_fkey(full_name, role)
+        verified_by_profile:profiles!laboratory_results_verified_by_fkey(full_name, role)
       )
     `)
     .eq('patient_id', patientId)
     .order('created_at', { ascending: false });
   if (status && status !== 'all') query = query.eq('status', status);
-  return query;
+  const res = await query;
+  if (res.data) {
+    res.data.forEach(order => {
+      if (order.results) {
+        order.results.forEach(r => {
+          r.finalized_by_profile = r.verified_by_profile;
+          r.comments = r.findings || r.comments;
+        });
+      }
+    });
+  }
+  return res;
 }
 
 export async function getAllLabOrders(status = null, limit = 50) {
@@ -260,24 +351,39 @@ export async function getAllLabOrders(status = null, limit = 50) {
 
 export async function createLabOrder(orderData, items = []) {
   const { data: { user } } = await supabase.auth.getUser();
+  const orderPayload = {
+    patient_id: orderData.patient_id,
+    encounter_id: orderData.encounter_id || null,
+    ordering_doctor_id: orderData.ordering_doctor_id || user.id,
+    clinical_indication: orderData.clinical_indication || null,
+    priority: orderData.priority || 'routine',
+    status: orderData.status || 'pending',
+  };
+
   const { data: order, error: orderErr } = await supabase
     .from('laboratory_orders')
-    .insert([{ ...orderData, ordering_doctor_id: user.id }])
+    .insert([orderPayload])
     .select()
     .single();
   if (orderErr) return { data: null, error: orderErr };
 
   if (items.length > 0) {
+    const sanitizedItems = items.map(item => ({
+      order_id: order.id,
+      test_name: item.test_name,
+      test_category: item.test_category || null,
+      instructions: item.instructions || item.notes || null,
+    }));
     const { error: itemErr } = await supabase
       .from('laboratory_order_items')
-      .insert(items.map(item => ({ ...item, order_id: order.id })));
+      .insert(sanitizedItems);
     if (itemErr) return { data: order, error: itemErr };
   }
   return { data: order, error: null };
 }
 
 export async function updateLabOrderStatus(orderId, status, technicianId = null) {
-  const updates = { status };
+  const updates = { status, updated_at: new Date().toISOString() };
   if (technicianId) updates.assigned_technician_id = technicianId;
   return supabase
     .from('laboratory_orders')
@@ -290,27 +396,52 @@ export async function updateLabOrderStatus(orderId, status, technicianId = null)
 // ─── Lab Results ──────────────────────────────────────────────────────────────
 
 export async function getLabResults(orderId) {
-  return supabase
+  const res = await supabase
     .from('laboratory_results')
     .select(`
       *,
       performed_by_profile:profiles!laboratory_results_performed_by_fkey(full_name, role),
-      finalized_by_profile:profiles!laboratory_results_finalized_by_fkey(full_name, role)
+      verified_by_profile:profiles!laboratory_results_verified_by_fkey(full_name, role)
     `)
     .eq('order_id', orderId)
     .order('created_at', { ascending: false });
+
+  if (res.data) {
+    res.data.forEach(r => {
+      r.finalized_by_profile = r.verified_by_profile;
+      r.comments = r.findings || r.comments;
+    });
+  }
+  return res;
 }
 
 export async function saveLabResult(resultData) {
   const { data: { user } } = await supabase.auth.getUser();
-  const payload = { ...resultData, performed_by: user.id };
+  const isFinal = resultData.status === 'finalized';
 
-  if (payload.id) {
-    const { id, ...updates } = payload;
+  const payload = {
+    order_id: resultData.order_id,
+    order_item_id: resultData.order_item_id || null,
+    patient_id: resultData.patient_id,
+    performed_by: resultData.performed_by || user?.id,
+    result_value: resultData.result_value != null ? String(resultData.result_value) : null,
+    units: resultData.units || resultData.unit || null,
+    reference_range: resultData.reference_range || null,
+    is_abnormal: Boolean(resultData.is_abnormal),
+    critical_flag: Boolean(resultData.critical_flag),
+    findings: resultData.findings || resultData.comments || null,
+    recommendations: resultData.recommendations || null,
+    status: isFinal ? 'finalized' : (resultData.status || 'draft'),
+    verified_by: resultData.verified_by || resultData.finalized_by || (isFinal ? user?.id : null),
+    verified_at: resultData.verified_at || resultData.finalized_at || (isFinal ? new Date().toISOString() : null),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (resultData.id) {
     return supabase
       .from('laboratory_results')
-      .update(updates)
-      .eq('id', id)
+      .update(payload)
+      .eq('id', resultData.id)
       .select()
       .single();
   }
@@ -323,12 +454,14 @@ export async function saveLabResult(resultData) {
 
 export async function finalizeLabResult(resultId) {
   const { data: { user } } = await supabase.auth.getUser();
+  const now = new Date().toISOString();
   return supabase
     .from('laboratory_results')
     .update({
       status: 'finalized',
-      finalized_by: user.id,
-      finalized_at: new Date().toISOString(),
+      verified_by: user.id,
+      verified_at: now,
+      updated_at: now,
     })
     .eq('id', resultId)
     .select()
@@ -345,7 +478,7 @@ export async function getPrescriptions(patientId, status = null) {
       prescribing_doctor:profiles!prescriptions_prescribing_doctor_id_fkey(full_name, role),
       items:prescription_items(
         *,
-        medicine:medicine_catalog(generic_name, brand_name, strength, dosage_form, unit_of_measure, current_stock)
+        medicine:medicine_catalog(generic_name, brand_name, strength, dosage_form)
       )
     `)
     .eq('patient_id', patientId)
@@ -356,17 +489,35 @@ export async function getPrescriptions(patientId, status = null) {
 
 export async function createPrescription(prescriptionData, items = []) {
   const { data: { user } } = await supabase.auth.getUser();
+  const rxPayload = {
+    patient_id: prescriptionData.patient_id,
+    encounter_id: prescriptionData.encounter_id || null,
+    prescribing_doctor_id: prescriptionData.prescribing_doctor_id || user.id,
+    status: prescriptionData.status || 'active',
+    clinical_notes: prescriptionData.clinical_notes || prescriptionData.notes || null,
+  };
+
   const { data: rx, error: rxErr } = await supabase
     .from('prescriptions')
-    .insert([{ ...prescriptionData, prescribing_doctor_id: user.id, status: 'active' }])
+    .insert([rxPayload])
     .select()
     .single();
   if (rxErr) return { data: null, error: rxErr };
 
   if (items.length > 0) {
+    const sanitizedItems = items.map(item => ({
+      prescription_id: rx.id,
+      medicine_id: item.medicine_id,
+      dosage: item.dosage,
+      frequency: item.frequency,
+      duration: item.duration || null,
+      quantity_prescribed: item.quantity_prescribed || item.quantity || 1,
+      quantity_dispensed: item.quantity_dispensed || 0,
+      special_instructions: item.special_instructions || item.instructions || null,
+    }));
     const { error: itemErr } = await supabase
       .from('prescription_items')
-      .insert(items.map(item => ({ ...item, prescription_id: rx.id })));
+      .insert(sanitizedItems);
     if (itemErr) return { data: rx, error: itemErr };
   }
   return { data: rx, error: null };
@@ -403,13 +554,11 @@ export async function createDispensingRecord(recordData, items = []) {
 
   // Dispense each item atomically via the deduct_stock function
   for (const item of items) {
-    // Insert dispensing item
     const { error: itemErr } = await supabase
       .from('dispensing_items')
       .insert([{ ...item, dispensing_record_id: record.id }]);
     if (itemErr) return { data: record, error: itemErr };
 
-    // Atomically deduct stock
     const { error: stockErr } = await supabase.rpc('deduct_stock', {
       p_medicine_id: item.medicine_id,
       p_batch_id: item.batch_id || null,
@@ -419,16 +568,14 @@ export async function createDispensingRecord(recordData, items = []) {
     });
     if (stockErr) return { data: record, error: stockErr };
 
-    // Update prescription item quantity_dispensed if linked
     if (item.prescription_item_id) {
       await supabase
         .from('prescription_items')
-        .update({ quantity_dispensed: supabase.rpc('quantity_dispensed', {}) })
+        .update({ quantity_dispensed: item.quantity_dispensed })
         .eq('id', item.prescription_item_id);
     }
   }
 
-  // Mark dispensing record as completed
   await supabase
     .from('dispensing_records')
     .update({ status: 'completed', dispensed_at: new Date().toISOString() })
@@ -439,10 +586,8 @@ export async function createDispensingRecord(recordData, items = []) {
 
 /**
  * Simpler dispense: create record + items + call deduct_stock per item
- * This version takes full control with explicit quantity tracking.
  */
 export async function dispenseItems(patientId, encounterId, prescriptionId, dispensingItems, notes) {
-  // Use atomic dispensing transaction function for prescription dispensing
   if (prescriptionId) {
     const itemsPayload = dispensingItems.map(item => ({
       prescription_item_id: item.prescription_item_id,
@@ -462,7 +607,6 @@ export async function dispenseItems(patientId, encounterId, prescriptionId, disp
     return { data: { id: data.dispensing_record_id, ...data }, error: null };
   }
 
-  // Fallback for direct inventory adjustment without prescription
   const { data: { user } } = await supabase.auth.getUser();
   const { data: record, error: recErr } = await supabase
     .from('dispensing_records')
@@ -508,7 +652,7 @@ export async function getMedicineBatches(medicineId) {
     .from('medicine_batches')
     .select('*')
     .eq('medicine_id', medicineId)
-    .gt('quantity', 0)
+    .gt('quantity_remaining', 0)
     .order('expiry_date', { ascending: true });
 }
 

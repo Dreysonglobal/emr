@@ -377,8 +377,8 @@ function renderInboxItem(t) {
       <div class="list-item-avatar">${getInitials(name)}</div>
       <div class="list-item-body">
         <div class="list-item-title">${escapeHtml(name)} <span class="text-muted" style="font-weight:400">· ${escapeHtml(patient.hospital_number || '')}</span></div>
-        <div class="list-item-meta">From: ${escapeHtml(sender.full_name || '—')} (${escapeHtml(sender.department || '')})</div>
-        ${t.message ? `<div class="list-item-note">${escapeHtml(t.message)}</div>` : ''}
+        <div class="list-item-meta">From: ${escapeHtml(sender.full_name || '—')} (${escapeHtml(sender.department || t.from_department || '')})</div>
+        ${t.reason ? `<div class="list-item-note">${escapeHtml(t.reason)}</div>` : ''}
       </div>
       <div class="list-item-aside">
         <span class="badge ${statusClass}">${formatTransferStatus(t.status)}</span>
@@ -803,11 +803,10 @@ async function saveNote() {
     patient_id: patient.id,
     encounter_id: encounterId || null,
     note_type: 'clinical',
+    raw_note: content,
     content,
+    author_id: user.user.id,
     author: user.user.id,
-    is_signed: shouldSign,
-    signed_at: shouldSign ? new Date().toISOString() : null,
-    signed_by: shouldSign ? user.user.id : null,
   });
 
   if (error) { showToast(error.message, 'error'); return; }
@@ -832,7 +831,7 @@ async function loadChartDiagnoses(patientId, encounterId) {
       <div class="list-item-body">
         <div class="list-item-title">${d.icd_code ? `<span class="badge badge-info">${escapeHtml(d.icd_code)}</span> ` : ''}${escapeHtml(d.diagnosis_name || '')}</div>
         ${d.notes ? `<div class="list-item-note">${escapeHtml(d.notes)}</div>` : ''}
-        <div class="list-item-meta">By: ${escapeHtml(d.recorded_by_profile?.full_name || '—')} · ${timeAgo(d.created_at)}</div>
+        <div class="list-item-meta">By: ${escapeHtml(d.diagnosed_by_profile?.full_name || d.recorded_by_profile?.full_name || '—')} · ${timeAgo(d.created_at)}</div>
       </div>
     </div>
   `).join('');
@@ -847,9 +846,10 @@ async function saveDiagnosis() {
   const { error } = await addDiagnosis({
     patient_id: patient.id,
     encounter_id: encounterId || null,
-    icd_code: document.getElementById('dx-icd').value.trim() || null,
+    icd10_code: document.getElementById('dx-icd').value.trim() || null,
     diagnosis_name: name,
     notes: document.getElementById('dx-notes').value.trim() || null,
+    diagnosed_by: user.user.id,
     recorded_by: user.user.id,
   });
 
@@ -897,13 +897,13 @@ async function loadChartTransfers(patientId) {
       <div class="timeline-item">
         <div class="timeline-dot ${getStatusBadgeClass(t.status)}"></div>
         <div class="timeline-content">
-          <div class="timeline-title">${escapeHtml(t.sending_department || '—')} → ${escapeHtml(t.receiving_department || '—')}</div>
+          <div class="timeline-title">${escapeHtml(t.from_department || '—')} → ${escapeHtml(t.to_department || '—')}</div>
           <div class="timeline-meta">
             ${escapeHtml(t.sender?.full_name || '—')} → ${escapeHtml(t.recipient?.full_name || '—')}
             <span class="badge ${getStatusBadgeClass(t.status)}" style="margin-left:.5rem">${formatTransferStatus(t.status)}</span>
           </div>
           <div class="timeline-time">${formatDate(t.created_at, 'datetime')}</div>
-          ${t.message ? `<div class="timeline-note">${escapeHtml(t.message)}</div>` : ''}
+          ${t.reason ? `<div class="timeline-note">${escapeHtml(t.reason)}</div>` : ''}
         </div>
       </div>
     `).join('')}
@@ -1094,11 +1094,12 @@ async function submitLabOrder() {
       return;
     }
 
-    // laboratory_order_items only has columns: id, order_id, test_name, test_code, notes, created_at
+    // laboratory_order_items columns: id, order_id, test_name, test_category, instructions, created_at
     const itemsToInsert = items.map(i => ({
       order_id: order.id,
       test_name: i.test_name,
-      test_code: i.test_code || null,
+      test_category: i.test_category || null,
+      instructions: i.instructions || i.notes || null,
     }));
 
     const { error: itemsError } = await supabase.from('laboratory_order_items').insert(itemsToInsert);
@@ -1310,7 +1311,7 @@ async function submitPrescription() {
       patient_id: patientId,
       encounter_id: chartContext?.encounterId || null,
       prescribing_doctor_id: user.user.id,
-      notes: document.getElementById('rx-notes').value.trim() || null,
+      clinical_notes: document.getElementById('rx-notes')?.value.trim() || null,
       status: 'active',
     }]).select().single();
 
@@ -1322,7 +1323,16 @@ async function submitPrescription() {
       return;
     }
 
-    const itemsToInsert = items.map(i => ({ ...i, prescription_id: rx.id }));
+    const itemsToInsert = items.map(i => ({
+      prescription_id: rx.id,
+      medicine_id: i.medicine_id,
+      dosage: i.dosage,
+      frequency: i.frequency,
+      duration: i.duration || null,
+      quantity_prescribed: i.quantity_prescribed || i.quantity || 1,
+      quantity_dispensed: 0,
+      special_instructions: i.special_instructions || i.instructions || null,
+    }));
     const { error: itemsError } = await supabase.from('prescription_items').insert(itemsToInsert);
 
     if (itemsError) {
@@ -1401,9 +1411,9 @@ async function submitSendFile() {
     patient_id: chartContext.patient.id,
     encounter_id: chartContext.encounterId || null,
     recipient_id: recipientId,
-    sending_department: fromDept,
-    receiving_department: toDept,
-    message: document.getElementById('send-message').value.trim() || null,
+    from_department: fromDept,
+    to_department: toDept,
+    reason: document.getElementById('send-message')?.value.trim() || 'Patient file transfer',
   });
 
   if (error) { showToast(error.message, 'error'); btn.disabled = false; return; }

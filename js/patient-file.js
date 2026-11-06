@@ -391,7 +391,7 @@ export class PatientFile {
             <div class="diagnosis-entry">
               <span class="diagnosis-name">${escapeHtml(d.diagnosis_name)}${d.diagnosis_code ? ` <small>(${escapeHtml(d.diagnosis_code)})</small>` : ''}</span>
               ${d.notes ? `<span class="diagnosis-notes">${escapeHtml(d.notes)}</span>` : ''}
-              <span class="diagnosis-meta">${escapeHtml(d.recorded_by_profile?.full_name || '—')} · ${formatDate(d.created_at, 'date')}</span>
+              <span class="diagnosis-meta">${escapeHtml(d.diagnosed_by_profile?.full_name || d.recorded_by_profile?.full_name || '—')} · ${formatDate(d.created_at, 'date')}</span>
             </div>`).join('')}
         </div>
       </div>`;
@@ -579,7 +579,7 @@ export class PatientFile {
             </div>
             ${r.comments ? `<div class="result-comments">${escapeHtml(r.comments)}</div>` : ''}
             ${r.specimen_type ? `<div class="result-meta">Specimen: ${escapeHtml(r.specimen_type)}</div>` : ''}
-            <div class="result-meta">By ${escapeHtml(r.performed_by_profile?.full_name || '—')} · ${formatDate(r.created_at, 'datetime')} ${r.status === 'finalized' ? `· Finalized by ${escapeHtml(r.finalized_by_profile?.full_name || '—')} at ${formatDate(r.finalized_at, 'datetime')}` : ''}</div>
+            <div class="result-meta">By ${escapeHtml(r.performed_by_profile?.full_name || '—')} · ${formatDate(r.created_at, 'datetime')} ${r.status === 'finalized' ? `· Verified by ${escapeHtml(r.verified_by_profile?.full_name || r.finalized_by_profile?.full_name || '—')} at ${formatDate(r.finalized_at, 'datetime')}` : ''}</div>
           </div>`).join('')}
       </div>`;
   }
@@ -644,7 +644,7 @@ export class PatientFile {
             </div>
             ${(d.items || []).map(i => `
               <div class="dispensing-item">
-                <strong>${escapeHtml(i.medicine?.medicine_name || i.medicine_id)}</strong>
+                <strong>${escapeHtml(i.medicine?.generic_name || i.medicine?.brand_name || i.medicine?.medicine_name || i.medicine_id)}</strong>
                 ${i.medicine?.strength ? ` ${escapeHtml(i.medicine.strength)}` : ''}
                 — Qty: ${i.quantity_dispensed}
                 ${i.batch?.batch_number ? ` · Batch: ${escapeHtml(i.batch.batch_number)}` : ''}
@@ -978,6 +978,8 @@ export class PatientFile {
             status: action === 'finalize' ? 'finalized' : 'draft',
           };
           if (action === 'finalize') {
+            resultData.verified_by = this.userId;
+            resultData.verified_at = new Date().toISOString();
             resultData.finalized_by = this.userId;
             resultData.finalized_at = new Date().toISOString();
           }
@@ -1016,7 +1018,7 @@ export class PatientFile {
       itemsContainer.innerHTML = '<p class="loading-text">Loading prescription items…</p>';
       const { data: rx } = await supabase
         .from('prescriptions')
-        .select('*, items:prescription_items(*, medicine:medicine_catalog(id, medicine_name, generic_name, strength, dosage_form, current_stock))')
+        .select('*, items:prescription_items(*, medicine:medicine_catalog(id, generic_name, brand_name, strength, dosage_form, current_stock))')
         .eq('id', rxId)
         .single();
 
@@ -1026,7 +1028,7 @@ export class PatientFile {
       }
       itemsContainer.innerHTML = rx.items.map((item, idx) => `
         <div class="dispense-item-row" data-rx-item-id="${escapeHtml(item.id)}" data-medicine-id="${escapeHtml(item.medicine_id || '')}">
-          <strong>${escapeHtml(item.medicine_name || item.generic_name || '')} ${item.strength ? escapeHtml(item.strength) : ''}</strong>
+          <strong>${escapeHtml(item.medicine?.generic_name || item.medicine?.brand_name || item.medicine_name || item.generic_name || '')} ${item.strength ? escapeHtml(item.strength) : ''}</strong>
           — ${escapeHtml(item.dosage)}, ${escapeHtml(item.frequency)}
           — Prescribed: ${item.quantity}, Dispensed so far: ${item.quantity_dispensed || 0}
           ${item.medicine?.current_stock !== undefined ? ` · Stock: ${item.medicine.current_stock}` : ''}
