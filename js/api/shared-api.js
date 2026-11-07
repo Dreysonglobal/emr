@@ -465,20 +465,35 @@ export async function updateLabOrderStatus(orderId, status, technicianId = null)
 // ─── Lab Results ──────────────────────────────────────────────────────────────
 
 export async function getLabResults(orderId) {
-  const res = await supabase
+  let res = await supabase
     .from('laboratory_results')
     .select(`
       *,
+      order_item:laboratory_order_items!laboratory_results_order_item_id_fkey(id, test_name, test_category),
       performed_by_profile:profiles!laboratory_results_performed_by_fkey(full_name, role),
       verified_by_profile:profiles!laboratory_results_verified_by_fkey(full_name, role)
     `)
     .eq('order_id', orderId)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: true });
+
+  if (res.error) {
+    // Fallback if FK constraint name hint differs
+    res = await supabase
+      .from('laboratory_results')
+      .select(`
+        *,
+        performed_by_profile:profiles!laboratory_results_performed_by_fkey(full_name, role),
+        verified_by_profile:profiles!laboratory_results_verified_by_fkey(full_name, role)
+      `)
+      .eq('order_id', orderId)
+      .order('created_at', { ascending: true });
+  }
 
   if (res.data) {
     res.data.forEach(r => {
       r.finalized_by_profile = r.verified_by_profile;
       r.comments = r.findings || r.comments;
+      r.unit = r.units || r.unit;
     });
   }
   return res;

@@ -710,3 +710,170 @@
   .topbar-title { font-size: var(--text-lg); }
   .profile-btn-name { display: none; }
 }
+/* ===============================================================
+   LABORATORY RESULTS VIEWER
+=============================================================== */
+.lab-order-card {
+  border-left: 3px solid var(--border);
+  transition: all 0.2s ease;
+  flex-wrap: wrap !important;
+}
+.lab-order-card.expanded {
+  border-left-color: var(--primary);
+  background: var(--surface-hover, #f8fafc);
+}
+.lab-order-card-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  width: 100%;
+  gap: 1rem;
+}
+.toggle-lab-results-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  white-space: nowrap;
+  background: var(--primary-light, #eff6ff);
+  color: var(--primary, #0284c7);
+  border: 1px solid var(--primary, #0284c7);
+  transition: all 0.15s ease;
+}
+.toggle-lab-results-btn:hover {
+  background: var(--primary, #0284c7);
+  color: #ffffff;
+}
+.lab-order-results-panel {
+  background: var(--surface, #ffffff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius-md, 8px);
+  padding: 1rem;
+  margin-top: 0.75rem;
+  width: 100%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+.lab-results-empty {
+  text-align: center;
+  padding: 1.5rem 1rem;
+  background: var(--surface-alt, #f8fafc);
+  border: 1px dashed var(--border, #cbd5e1);
+  border-radius: var(--radius-sm, 6px);
+}
+.lab-results-empty .empty-icon {
+  font-size: 1.75rem;
+  margin-bottom: 0.35rem;
+}
+.lab-test-card {
+  background: #ffffff;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+  transition: box-shadow 0.15s ease;
+}
+.lab-test-card:last-child {
+  margin-bottom: 0;
+}
+.lab-test-card.lab-test-abnormal {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+.lab-test-card.lab-test-critical {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
+.lab-test-card.lab-test-pending {
+  border-style: dashed;
+  background: #fafafa;
+}
+.lab-test-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border-light, #f1f5f9);
+}
+.lab-test-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.lab-result-main-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.85rem;
+  background: var(--surface-hover, #f8fafc);
+  border-radius: var(--radius-sm, 4px);
+}
+.lab-test-abnormal .lab-result-main-row {
+  background: #fef3c7;
+}
+.lab-test-critical .lab-result-main-row {
+  background: #fee2e2;
+}
+.lab-result-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+.metric-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.lab-result-value {
+  font-weight: 700;
+  color: var(--text-dark, #0f172a);
+}
+.lab-result-block {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--surface-hover, #f8fafc);
+  font-size: 0.85rem;
+}
+.lab-result-block .block-label {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--text-muted, #64748b);
+  display: block;
+  margin-bottom: 0.2rem;
+}
+.lab-result-block .block-content {
+  color: var(--text-dark, #1e293b);
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.findings-block {
+  border-left: 3px solid var(--info, #0284c7);
+}
+.recommendations-block {
+  border-left: 3px solid var(--success, #16a34a);
+}
+.lab-test-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border-light, #f1f5f9);
+  font-size: 0.75rem;
+  color: var(--text-muted, #64748b);
+}

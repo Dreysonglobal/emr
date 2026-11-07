@@ -1044,14 +1044,23 @@ async function saveDiagnosis() {
 
 async function loadChartLabOrders(patientId) {
   const container = document.getElementById('chart-laborders-list');
+  if (!container) return;
   container.innerHTML = '<div class="loading-state">Loading...</div>';
   const { data, error } = await supabase.from('laboratory_orders')
-    .select(`*, laboratory_order_items(*), patient:patients(hospital_number,first_name,last_name)`)
+    .select(`*, laboratory_order_items(*), patient:patients(hospital_number,first_name,last_name), ordering_doctor:profiles!laboratory_orders_ordering_doctor_id_fkey(full_name, role)`)
     .eq('patient_id', patientId)
     .order('created_at', { ascending: false });
-  if (error) { container.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`; return; }
-  if (!data || data.length === 0) { container.innerHTML = '<div class="empty-state">No lab orders for this patient.</div>'; return; }
+  if (error) {
+    console.error('Failed to load chart lab orders:', error);
+    container.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`;
+    return;
+  }
+  if (!data || data.length === 0) {
+    container.innerHTML = '<div class="empty-state">No lab orders for this patient.</div>';
+    return;
+  }
   container.innerHTML = data.map(o => renderLabOrderCard(o)).join('');
+  attachLabOrderCardListeners(container, data);
 }
 
 async function loadChartPrescriptions(patientId) {
@@ -1159,38 +1168,317 @@ async function loadMyPatients() {
 // ─── Lab Orders ───────────────────────────────────────────────────────────────
 async function loadLabOrders() {
   const container = document.getElementById('laborders-list');
+  if (!container) return;
   container.innerHTML = '<div class="loading-state">Loading...</div>';
   const { data: user } = await supabase.auth.getUser();
   let query = supabase.from('laboratory_orders')
-    .select(`*, laboratory_order_items(*), patient:patients(hospital_number,first_name,last_name)`)
+    .select(`*, laboratory_order_items(*), patient:patients(hospital_number,first_name,last_name), ordering_doctor:profiles!laboratory_orders_ordering_doctor_id_fkey(full_name, role)`)
     .eq('ordering_doctor_id', user.user.id)
     .order('created_at', { ascending: false });
   if (labFilter !== 'all') query = query.eq('status', labFilter);
   const { data, error } = await query;
-  if (error) { container.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`; return; }
-  if (!data || data.length === 0) { container.innerHTML = '<div class="empty-state">No lab orders.</div>'; return; }
+  if (error) {
+    console.error('Failed to load lab orders:', error);
+    container.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`;
+    return;
+  }
+  if (!data || data.length === 0) {
+    container.innerHTML = '<div class="empty-state">No lab orders.</div>';
+    return;
+  }
   container.innerHTML = data.map(o => renderLabOrderCard(o)).join('');
+  attachLabOrderCardListeners(container, data);
 }
 
 function renderLabOrderCard(o) {
   const patient = o.patient || {};
   const items = o.laboratory_order_items || [];
   return `
-    <div class="list-item">
-      <div class="list-item-body">
-        <div class="list-item-title">
-          Order #${escapeHtml(o.order_number || o.id.slice(0, 8))} —
-          ${escapeHtml(patient.first_name || '')} ${escapeHtml(patient.last_name || '')}
-          <span class="badge badge-${o.priority === 'stat' ? 'danger' : o.priority === 'urgent' ? 'warning' : 'info'}" style="margin-left:.5rem">${escapeHtml(o.priority || 'routine')}</span>
+    <div class="list-item lab-order-card" id="lab-order-card-${escapeHtml(o.id)}">
+      <div class="lab-order-card-main">
+        <div class="list-item-body">
+          <div class="list-item-title">
+            Order #${escapeHtml(o.order_number || o.id.slice(0, 8))} —
+            ${escapeHtml(patient.first_name || '')} ${escapeHtml(patient.last_name || '')}
+            <span class="badge badge-${o.priority === 'stat' ? 'danger' : o.priority === 'urgent' ? 'warning' : 'info'}" style="margin-left:.5rem">${escapeHtml(o.priority || 'routine')}</span>
+          </div>
+          <div class="list-item-meta">
+            HN: ${escapeHtml(patient.hospital_number || '—')} · ${formatDate(o.created_at, 'datetime')}
+            ${o.ordering_doctor?.full_name ? ` · Dr. ${escapeHtml(o.ordering_doctor.full_name)}` : ''}
+          </div>
+          <div style="margin-top:.35rem;font-size:.82rem">
+            Tests: ${items.map(i => escapeHtml(i.test_name)).join(', ') || '—'}
+          </div>
+          ${o.clinical_indication ? `<div class="list-item-note">${escapeHtml(o.clinical_indication)}</div>` : ''}
         </div>
-        <div class="list-item-meta">HN: ${escapeHtml(patient.hospital_number || '—')} · ${formatDate(o.created_at, 'datetime')}</div>
-        <div style="margin-top:.35rem;font-size:.82rem">
-          Tests: ${items.map(i => escapeHtml(i.test_name)).join(', ') || '—'}
+        <div class="list-item-aside" style="display:flex;flex-direction:column;align-items:flex-end;gap:.5rem;">
+          <span class="badge ${getStatusBadgeClass(o.status)}">${escapeHtml(o.status || '')}</span>
+          <button type="button" class="btn btn-sm toggle-lab-results-btn" data-order-id="${escapeHtml(o.id)}" aria-expanded="false">
+            <span class="toggle-icon">▼</span> <span class="toggle-text">View Results</span>
+          </button>
         </div>
-        ${o.clinical_indication ? `<div class="list-item-note">${escapeHtml(o.clinical_indication)}</div>` : ''}
       </div>
-      <div class="list-item-aside">
-        <span class="badge ${getStatusBadgeClass(o.status)}">${escapeHtml(o.status || '')}</span>
+      <div class="lab-order-results-panel" id="lab-order-results-${escapeHtml(o.id)}" style="display:none;" data-loaded="false">
+      </div>
+    </div>
+  `;
+}
+
+function attachLabOrderCardListeners(container, orders) {
+  const orderMap = new Map((orders || []).map(o => [o.id, o]));
+
+  container.querySelectorAll('.toggle-lab-results-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const orderId = btn.dataset.orderId;
+      const order = orderMap.get(orderId);
+      const panel = document.getElementById(`lab-order-results-${orderId}`);
+      const card = document.getElementById(`lab-order-card-${orderId}`);
+      if (!panel || !order) return;
+
+      const isExpanded = panel.style.display !== 'none';
+      if (isExpanded) {
+        panel.style.display = 'none';
+        btn.setAttribute('aria-expanded', 'false');
+        btn.querySelector('.toggle-icon').textContent = '▼';
+        btn.querySelector('.toggle-text').textContent = 'View Results';
+        if (card) card.classList.remove('expanded');
+      } else {
+        panel.style.display = 'block';
+        btn.setAttribute('aria-expanded', 'true');
+        btn.querySelector('.toggle-icon').textContent = '▲';
+        btn.querySelector('.toggle-text').textContent = 'Hide Results';
+        if (card) card.classList.add('expanded');
+        await fetchAndRenderLabResults(order, panel);
+      }
+    });
+  });
+}
+
+async function fetchAndRenderLabResults(order, panel) {
+  panel.innerHTML = '<div class="loading-state" style="padding:1rem">Loading laboratory results…</div>';
+  try {
+    let results = [];
+    const { data, error } = await supabase
+      .from('laboratory_results')
+      .select(`
+        *,
+        order_item:laboratory_order_items!laboratory_results_order_item_id_fkey(id, test_name, test_category),
+        performed_by_profile:profiles!laboratory_results_performed_by_fkey(full_name, role),
+        verified_by_profile:profiles!laboratory_results_verified_by_fkey(full_name, role)
+      `)
+      .eq('order_id', order.id)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn('Primary lab results relationship query warning, falling back without order_item hint:', error);
+      const fallback = await supabase
+        .from('laboratory_results')
+        .select(`
+          *,
+          performed_by_profile:profiles!laboratory_results_performed_by_fkey(full_name, role),
+          verified_by_profile:profiles!laboratory_results_verified_by_fkey(full_name, role)
+        `)
+        .eq('order_id', order.id)
+        .order('created_at', { ascending: true });
+      if (fallback.error) throw fallback.error;
+      results = fallback.data || [];
+    } else {
+      results = data || [];
+    }
+
+    panel.innerHTML = renderLabResultsViewer(order, results);
+    panel.dataset.loaded = 'true';
+  } catch (err) {
+    console.error('Failed to load lab results:', err);
+    panel.innerHTML = `<div class="error-state" style="padding:.75rem">Failed to load lab results: ${escapeHtml(err.message || 'Unknown error')}</div>`;
+  }
+}
+
+function renderLabResultsViewer(order, results) {
+  if (!results || results.length === 0) {
+    return `
+      <div class="lab-results-empty">
+        <div class="empty-icon">🧪</div>
+        <p style="font-weight:600;margin:0 0 .25rem 0;color:var(--text-dark,#0f172a)">No laboratory results entered yet</p>
+        <p class="text-muted" style="font-size:.85rem;margin:0;">No laboratory results have been entered yet for this order. Results will appear here once recorded and submitted by the laboratory technician.</p>
+      </div>
+    `;
+  }
+
+  const items = order.laboratory_order_items || order.items || [];
+  const matchedResultIds = new Set();
+  const testEntries = [];
+
+  if (items.length > 0) {
+    for (const item of items) {
+      let res = results.find(r => r.order_item_id === item.id);
+      if (!res) {
+        res = results.find(r => !matchedResultIds.has(r.id) && (
+          (r.order_item?.test_name && r.order_item.test_name.toLowerCase() === item.test_name.toLowerCase()) ||
+          (r.test_name && r.test_name.toLowerCase() === item.test_name.toLowerCase())
+        ));
+      }
+      if (!res && items.length === 1 && results.length === 1 && !matchedResultIds.has(results[0].id)) {
+        res = results[0];
+      }
+      if (res) matchedResultIds.add(res.id);
+
+      testEntries.push({
+        testName: item.test_name,
+        testCategory: item.test_category,
+        result: res || null
+      });
+    }
+  }
+
+  for (const res of results) {
+    if (!matchedResultIds.has(res.id)) {
+      testEntries.push({
+        testName: res.order_item?.test_name || res.test_name || 'Diagnostic Test',
+        testCategory: res.order_item?.test_category || null,
+        result: res
+      });
+    }
+  }
+
+  return `
+    <div class="lab-results-viewer">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;padding-bottom:.35rem;border-bottom:1px solid var(--border,#e2e8f0);">
+        <strong style="font-size:.9rem;color:var(--text-dark,#0f172a)">🔬 Diagnostic Test Results (${results.length} recorded)</strong>
+        <span class="text-muted" style="font-size:.78rem;">Order #${escapeHtml(order.order_number || order.id.slice(0, 8))}</span>
+      </div>
+      <div class="lab-tests-list">
+        ${testEntries.map(entry => renderIndividualTestResult(entry)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderIndividualTestResult(entry) {
+  const { testName, testCategory, result: res } = entry;
+
+  if (!res) {
+    return `
+      <div class="lab-test-card lab-test-pending">
+        <div class="lab-test-header">
+          <div class="lab-test-name">
+            <strong>${escapeHtml(testName)}</strong>
+            ${testCategory ? `<span class="text-muted" style="font-size:.8rem;margin-left:.35rem">(${escapeHtml(testCategory)})</span>` : ''}
+          </div>
+          <span class="badge badge-secondary">Pending Result</span>
+        </div>
+        <div class="lab-test-body" style="padding:.5rem 0;font-size:.85rem;color:var(--text-muted,#64748b);">
+          Awaiting laboratory analysis — no result recorded yet for this test.
+        </div>
+      </div>
+    `;
+  }
+
+  const isVerified = res.status === 'finalized' || !!res.verified_at;
+  const isPendingVerif = !isVerified && res.result_value != null && String(res.result_value).trim() !== '';
+  let verifLabel = 'Draft';
+  let verifBadgeClass = 'badge-secondary';
+  let verifIcon = '📝';
+
+  if (isVerified) {
+    verifLabel = 'Verified';
+    verifBadgeClass = 'badge-success';
+    verifIcon = '✅';
+  } else if (res.status === 'amended') {
+    verifLabel = 'Amended';
+    verifBadgeClass = 'badge-info';
+    verifIcon = '📝';
+  } else if (isPendingVerif) {
+    verifLabel = 'Pending verification';
+    verifBadgeClass = 'badge-warning';
+    verifIcon = '⏳';
+  }
+
+  let cardClass = 'lab-test-card';
+  let valueStyle = 'font-weight:700;';
+  let alertBadge = '<span class="badge badge-success" style="margin-left:.35rem">Normal</span>';
+
+  if (res.critical_flag) {
+    cardClass += ' lab-test-critical';
+    valueStyle = 'font-weight:700;color:var(--danger,#dc2626);font-size:1.1rem;';
+    alertBadge = '<span class="badge badge-danger" style="margin-left:.35rem;font-weight:700">⚡ CRITICAL</span>';
+  } else if (res.is_abnormal) {
+    cardClass += ' lab-test-abnormal';
+    valueStyle = 'font-weight:700;color:#d97706;font-size:1.05rem;';
+    alertBadge = '<span class="badge badge-warning" style="margin-left:.35rem;font-weight:700">⚠ ABNORMAL</span>';
+  }
+
+  const units = res.units || res.unit || '';
+  const findings = res.findings || res.comments || '';
+  const recommendations = res.recommendations || '';
+  const performer = res.performed_by_profile?.full_name || 'Laboratory Staff';
+  const verifier = res.verified_by_profile?.full_name || 'Staff';
+
+  return `
+    <div class="${cardClass}">
+      <div class="lab-test-header">
+        <div class="lab-test-name">
+          <span style="font-size:.95rem;font-weight:700;">${escapeHtml(testName)}</span>
+          ${testCategory ? `<span class="text-muted" style="font-size:.8rem;margin-left:.35rem">(${escapeHtml(testCategory)})</span>` : ''}
+          ${alertBadge}
+        </div>
+        <div class="lab-test-status">
+          <span class="badge ${verifBadgeClass}">${verifIcon} ${verifLabel}</span>
+        </div>
+      </div>
+
+      <div class="lab-test-body">
+        <div class="lab-result-main-row">
+          <div class="lab-result-metric">
+            <span class="metric-label">Result:</span>
+            <span class="lab-result-value" style="${valueStyle}">
+              ${escapeHtml(res.result_value || '—')}
+            </span>
+            ${units ? `<span class="metric-units" style="margin-left:.25rem;font-size:.85rem;color:var(--text-muted,#64748b);">${escapeHtml(units)}</span>` : ''}
+          </div>
+          ${res.reference_range ? `
+            <div class="lab-result-ref" style="font-size:.85rem;">
+              <span class="metric-label">Reference Range:</span>
+              <span style="font-weight:600;color:var(--text-dark,#1e293b);margin-left:.25rem;">${escapeHtml(res.reference_range)}</span>
+            </div>
+          ` : ''}
+        </div>
+
+        ${findings ? `
+          <div class="lab-result-block findings-block">
+            <span class="block-label">🔬 Findings:</span>
+            <div class="block-content">${escapeHtml(findings)}</div>
+          </div>
+        ` : ''}
+
+        ${recommendations ? `
+          <div class="lab-result-block recommendations-block">
+            <span class="block-label">💡 Recommendations:</span>
+            <div class="block-content">${escapeHtml(recommendations)}</div>
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="lab-test-footer">
+        <div class="staff-tag">
+          <span>🔬 Performed by: <strong>${escapeHtml(performer)}</strong></span>
+          ${res.created_at ? `<span class="text-muted"> · ${formatDate(res.created_at, 'datetime')}</span>` : ''}
+        </div>
+        ${isVerified ? `
+          <div class="staff-tag verified-tag" style="color:var(--success,#16a34a);font-weight:500;">
+            <span>✅ Verified by: <strong>${escapeHtml(verifier)}</strong></span>
+            ${res.verified_at ? `<span class="text-muted"> · ${formatDate(res.verified_at, 'datetime')}</span>` : ''}
+          </div>
+        ` : isPendingVerif ? `
+          <div class="staff-tag pending-tag" style="color:#d97706;font-weight:500;">
+            <span>⏳ Awaiting laboratory verification</span>
+          </div>
+        ` : `
+          <div class="staff-tag draft-tag text-muted">
+            <span>📝 Draft record</span>
+          </div>
+        `}
       </div>
     </div>
   `;

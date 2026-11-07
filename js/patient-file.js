@@ -567,25 +567,38 @@ export class PatientFile {
     return `
       <div class="pf-subsection">
         <h4>Results</h4>
-        ${results.map(r => `
-          <div class="result-entry ${r.is_abnormal ? 'result-abnormal' : ''} ${r.status === 'finalized' ? 'result-finalized' : ''}">
+        ${results.map(r => {
+          const testName = r.order_item?.test_name || r.test_name || 'Diagnostic Test';
+          const units = r.units || r.unit;
+          const findings = r.findings || r.comments;
+          const isVerified = r.status === 'finalized' || !!r.verified_at;
+          const isPending = !isVerified && r.result_value != null && String(r.result_value).trim() !== '';
+          const statusLabel = isVerified ? 'Verified' : isPending ? 'Pending verification' : 'Draft';
+          const statusBadge = isVerified ? 'badge-success' : isPending ? 'badge-warning' : 'badge-secondary';
+          return `
+          <div class="result-entry ${r.critical_flag ? 'result-critical' : r.is_abnormal ? 'result-abnormal' : ''} ${isVerified ? 'result-finalized' : ''}">
             <div class="result-row">
-              <strong>${escapeHtml(r.test_name)}</strong>
-              <span class="result-value">${escapeHtml(r.result_value || '—')}</span>
-              ${r.unit ? `<span class="result-unit">${escapeHtml(r.unit)}</span>` : ''}
+              <strong>${escapeHtml(testName)}</strong>
+              <span class="result-value ${r.critical_flag ? 'text-danger' : r.is_abnormal ? 'text-warning' : ''}">${escapeHtml(r.result_value || '—')}</span>
+              ${units ? `<span class="result-unit">${escapeHtml(units)}</span>` : ''}
               ${r.reference_range ? `<span class="result-ref">Ref: ${escapeHtml(r.reference_range)}</span>` : ''}
-              ${r.is_abnormal ? '<span class="abnormal-flag">⚠ ABNORMAL</span>' : ''}
-              <span class="status-badge ${getStatusBadgeClass(r.status)}">${r.status}</span>
+              ${r.critical_flag ? '<span class="abnormal-flag" style="background:#fee2e2;color:#b91c1c;">⚡ CRITICAL</span>' : r.is_abnormal ? '<span class="abnormal-flag">⚠ ABNORMAL</span>' : '<span class="badge badge-success">Normal</span>'}
+              <span class="badge ${statusBadge}">${statusLabel}</span>
             </div>
-            ${r.comments ? `<div class="result-comments">${escapeHtml(r.comments)}</div>` : ''}
-            ${r.specimen_type ? `<div class="result-meta">Specimen: ${escapeHtml(r.specimen_type)}</div>` : ''}
-            <div class="result-meta">By ${escapeHtml(r.performed_by_profile?.full_name || '—')} · ${formatDate(r.created_at, 'datetime')} ${r.status === 'finalized' ? `· Verified by ${escapeHtml(r.verified_by_profile?.full_name || r.finalized_by_profile?.full_name || '—')} at ${formatDate(r.finalized_at, 'datetime')}` : ''}</div>
-          </div>`).join('')}
+            ${findings ? `<div class="result-comments"><strong>Findings:</strong> ${escapeHtml(findings)}</div>` : ''}
+            ${r.recommendations ? `<div class="result-comments" style="margin-top:.25rem;color:var(--text-dark,#1e293b);"><strong>Recommendations:</strong> ${escapeHtml(r.recommendations)}</div>` : ''}
+            <div class="result-meta">
+              By ${escapeHtml(r.performed_by_profile?.full_name || '—')} · ${formatDate(r.created_at, 'datetime')}
+              ${isVerified ? ` · Verified by ${escapeHtml(r.verified_by_profile?.full_name || '—')} at ${formatDate(r.verified_at || r.finalized_at, 'datetime')}` : isPending ? ' · ⏳ Pending verification' : ''}
+            </div>
+          </div>`;
+        }).join('')}
       </div>`;
   }
 
   _renderResultEntryForm(order) {
     const canAccept = order.status === 'pending' || order.status === 'assigned';
+    const items = order.items || [];
     return `
       <div class="pf-subsection pf-write-section">
         ${canAccept ? `
@@ -594,15 +607,30 @@ export class PatientFile {
           </button>` : ''}
         <h4>Enter Results for ${escapeHtml(order.order_number)}</h4>
         <form class="pf-result-form form-grid" data-order-id="${escapeHtml(order.id)}">
-          <div class="form-group"><label>Test Name *</label><input type="text" name="test_name" placeholder="e.g. Haemoglobin" required value="${order.items?.[0]?.test_name ? escapeHtml(order.items[0].test_name) : ''}"/></div>
-          <div class="form-group"><label>Specimen</label><input type="text" name="specimen_type" placeholder="e.g. Whole blood"/></div>
-          <div class="form-group"><label>Result *</label><input type="text" name="result_value" placeholder="e.g. 12.5" required/></div>
-          <div class="form-group"><label>Unit</label><input type="text" name="unit" placeholder="e.g. g/dL"/></div>
-          <div class="form-group"><label>Reference Range</label><input type="text" name="reference_range" placeholder="e.g. 12–16 g/dL"/></div>
+          ${items.length > 1 ? `
+            <div class="form-group form-group-wide">
+              <label>Select Test *</label>
+              <select name="order_item_id" required>
+                ${items.map(it => `<option value="${escapeHtml(it.id)}">${escapeHtml(it.test_name)}</option>`).join('')}
+              </select>
+            </div>
+          ` : items.length === 1 ? `
+            <input type="hidden" name="order_item_id" value="${escapeHtml(items[0].id)}"/>
+            <div class="form-group"><label>Test</label><input type="text" readonly value="${escapeHtml(items[0].test_name)}"/></div>
+          ` : `
+            <div class="form-group"><label>Test Name *</label><input type="text" name="test_name" placeholder="e.g. Malaria RDT" required/></div>
+          `}
+          <div class="form-group"><label>Result Value *</label><input type="text" name="result_value" placeholder="e.g. Positive, Negative, 12.5" required/></div>
+          <div class="form-group"><label>Units</label><input type="text" name="units" placeholder="e.g. g/dL, mg/dL"/></div>
+          <div class="form-group"><label>Reference Range</label><input type="text" name="reference_range" placeholder="e.g. Negative, 12–16 g/dL"/></div>
           <div class="form-group"><label>Abnormal?</label>
-            <select name="is_abnormal"><option value="">No</option><option value="true">Yes — Abnormal</option></select>
+            <select name="is_abnormal"><option value="">No — Normal</option><option value="true">Yes — Abnormal</option></select>
           </div>
-          <div class="form-group form-group-wide"><label>Comments</label><textarea name="comments" rows="2" placeholder="Lab technician comments…"></textarea></div>
+          <div class="form-group"><label>Critical Flag?</label>
+            <select name="critical_flag"><option value="">No</option><option value="true">Yes — CRITICAL</option></select>
+          </div>
+          <div class="form-group form-group-wide"><label>Findings</label><textarea name="findings" rows="2" placeholder="Clinical findings / observations…"></textarea></div>
+          <div class="form-group form-group-wide"><label>Recommendations</label><textarea name="recommendations" rows="2" placeholder="Recommendations / next steps…"></textarea></div>
           <div class="form-actions">
             <button type="submit" name="action" value="draft" class="btn btn-secondary">💾 Save Draft</button>
             <button type="submit" name="action" value="finalize" class="btn btn-primary">✅ Save & Finalize</button>
@@ -999,15 +1027,17 @@ export class PatientFile {
           const fd = new FormData(form);
           const resultData = {
             order_id: orderId,
+            order_item_id: fd.get('order_item_id') || null,
             patient_id: patient.id,
             encounter_id: encounter?.id || null,
             test_name: fd.get('test_name'),
-            specimen_type: fd.get('specimen_type') || null,
             result_value: fd.get('result_value'),
-            unit: fd.get('unit') || null,
+            units: fd.get('units') || fd.get('unit') || null,
             reference_range: fd.get('reference_range') || null,
             is_abnormal: fd.get('is_abnormal') === 'true',
-            comments: fd.get('comments') || null,
+            critical_flag: fd.get('critical_flag') === 'true',
+            findings: fd.get('findings') || fd.get('comments') || null,
+            recommendations: fd.get('recommendations') || null,
             status: action === 'finalize' ? 'finalized' : 'draft',
           };
           if (action === 'finalize') {
