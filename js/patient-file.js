@@ -432,7 +432,7 @@ export class PatientFile {
               ${(rx.items || []).map(i => `
                 <div class="rx-item">
                   <strong>${escapeHtml(i.medicine_name)}${i.strength ? ` ${escapeHtml(i.strength)}` : ''}</strong>
-                  — ${escapeHtml(i.dosage)}, ${escapeHtml(i.frequency)}${i.duration ? `, ${escapeHtml(i.duration)}` : ''}, Qty: ${i.quantity}
+                  — ${escapeHtml(i.dosage)}, ${escapeHtml(i.frequency)}${i.duration ? `, ${escapeHtml(i.duration)}` : ''}, Qty: ${i.quantity_prescribed ?? i.quantity ?? '—'}
                   ${i.instructions ? `<div class="rx-instructions">${escapeHtml(i.instructions)}</div>` : ''}
                 </div>`).join('')}
             </div>
@@ -1079,35 +1079,53 @@ export class PatientFile {
         return;
       }
       itemsContainer.innerHTML = '<p class="loading-text">Loading prescription items…</p>';
-      const { data: rx } = await supabase
+      const { data: rx, error: rxErr } = await supabase
         .from('prescriptions')
         .select('*, items:prescription_items(*, medicine:medicine_catalog(id, generic_name, brand_name, strength, dosage_form, current_stock))')
         .eq('id', rxId)
         .single();
 
-      if (!rx?.items?.length) {
+      if (rxErr || !rx?.items?.length) {
         itemsContainer.innerHTML = '<p class="empty-text">No items in this prescription.</p>';
         return;
       }
-      itemsContainer.innerHTML = rx.items.map((item, idx) => `
+      itemsContainer.innerHTML = rx.items.map((item, idx) => {
+        const medName = item.medicine?.generic_name || item.medicine?.brand_name || item.medicine_name || item.generic_name || 'Medication';
+        const strength = item.medicine?.strength || item.strength || '';
+        const prescribed = Number(item.quantity_prescribed ?? item.quantity ?? 0);
+        const dispensed = Number(item.quantity_dispensed ?? 0);
+        const safePrescribed = (isNaN(prescribed) || prescribed < 0) ? 0 : prescribed;
+        const safeDispensed = (isNaN(dispensed) || dispensed < 0) ? 0 : dispensed;
+        const remaining = Math.max(0, safePrescribed - safeDispensed);
+        const stock = item.medicine?.current_stock;
+
+        return `
         <div class="dispense-item-row" data-rx-item-id="${escapeHtml(item.id)}" data-medicine-id="${escapeHtml(item.medicine_id || '')}">
-          <strong>${escapeHtml(item.medicine?.generic_name || item.medicine?.brand_name || item.medicine_name || item.generic_name || '')} ${item.strength ? escapeHtml(item.strength) : ''}</strong>
-          — ${escapeHtml(item.dosage)}, ${escapeHtml(item.frequency)}
-          — Prescribed: ${item.quantity}, Dispensed so far: ${item.quantity_dispensed || 0}
-          ${item.medicine?.current_stock !== undefined ? ` · Stock: ${item.medicine.current_stock}` : ''}
-          <div class="form-group">
-            <label>Quantity to Dispense *</label>
-            <input type="number" class="dispense-qty" min="1" max="${item.quantity - (item.quantity_dispensed || 0)}" 
-              value="${item.quantity - (item.quantity_dispensed || 0)}" 
-              data-max="${item.quantity - (item.quantity_dispensed || 0)}"
-              data-medicine-id="${escapeHtml(item.medicine_id || '')}"
-              data-rx-item-id="${escapeHtml(item.id)}"/>
-          </div>
-          <div class="form-group">
-            <label>Substitution Reason (if any)</label>
-            <input type="text" class="dispense-substitution" placeholder="Leave blank if dispensing exactly as prescribed"/>
-          </div>
-        </div>`).join('');
+          <strong>${escapeHtml(medName)} ${escapeHtml(strength)}</strong>
+          — ${escapeHtml(item.dosage || '')}, ${escapeHtml(item.frequency || '')}
+          — Prescribed: ${safePrescribed}, Dispensed so far: ${safeDispensed}
+          ${stock !== undefined ? ` · Available Stock: ${stock}` : ''}
+          ${remaining > 0 ? `
+            <div class="form-group">
+              <label>Quantity to Dispense * (Remaining: ${remaining})</label>
+              <input type="number" class="dispense-qty" min="1" max="${remaining}"
+                value="${remaining}"
+                data-max="${remaining}"
+                data-medicine-id="${escapeHtml(item.medicine_id || '')}"
+                data-rx-item-id="${escapeHtml(item.id)}"
+                required/>
+            </div>
+            <div class="form-group">
+              <label>Substitution Reason (if any)</label>
+              <input type="text" class="dispense-substitution" placeholder="Leave blank if dispensing exactly as prescribed"/>
+            </div>
+          ` : `
+            <div style="margin-top:.4rem;color:var(--success,#16a34a);font-weight:600;font-size:.85rem;">
+              ✅ Fully Dispensed (${safeDispensed}/${safePrescribed})
+            </div>
+          `}
+        </div>`;
+      }).join('');
     });
 
     document.getElementById('pf-dispensing-form')?.addEventListener('submit', async (e) => {
@@ -1118,20 +1136,34 @@ export class PatientFile {
       btn.disabled = true;
       try {
         const rxId = rxSelect?.value || null;
+        if (!rxId) {
+          showToast('Please select a prescription first.', 'warning');
+          return;
+        }
         const rows = document.querySelectorAll('.dispense-item-row');
         const items = [];
         for (const row of rows) {
           const qtyInput = row.querySelector('.dispense-qty');
-          const qty = parseInt(qtyInput?.value, 10);
-          if (!qty || qty <= 0) continue;
+          if (!qtyInput) continue;
+          const rawVal = qtyInput.value.trim();
+          if (!rawVal) continue;
+          const qty = parseInt(rawVal, 10);
+          if (isNaN(qty) || qty <= 0) {
+            showToast('Dispensing quantity must be a positive number.', 'warning');
+            qtyInput.focus();
+            return;
+          }
           const max = parseInt(qtyInput.dataset.max, 10);
-          if (qty > max) {
-            showToast(`Cannot dispense more than ${max} units (remaining quantity).`, 'error');
+          if (!isNaN(max) && qty > max) {
+            showToast(`Cannot dispense more than ${max} units (remaining prescribed quantity).`, 'error');
+            qtyInput.focus();
             return;
           }
           items.push({
-            medicine_id: row.dataset.medicineId,
-            prescription_item_id: row.dataset.rxItemId || null,
+            item_id: row.dataset.rxItemId,
+            prescription_item_id: row.dataset.rxItemId,
+            medicine_id: row.dataset.medicineId || null,
+            quantity: qty,
             quantity_dispensed: qty,
             substitution_reason: row.querySelector('.dispense-substitution')?.value.trim() || null,
           });
@@ -1139,7 +1171,15 @@ export class PatientFile {
         if (!items.length) { showToast('Enter at least one dispensing quantity.', 'warning'); return; }
         const notes = document.getElementById('pf-dispense-notes')?.value.trim() || null;
         const { error } = await dispenseItems(patient.id, encounter?.id || null, rxId, items, notes);
-        if (error) throw error;
+        if (error) {
+          console.error('Dispense error in patient-file:', {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint
+          });
+          throw error;
+        }
         document.getElementById('pf-dispensing-form').reset();
         itemsContainer.innerHTML = '<p class="helper-text">Select a prescription to see its items.</p>';
         showToast('Dispensing recorded successfully.', 'success');

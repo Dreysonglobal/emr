@@ -1655,7 +1655,7 @@ function renderRxCard(rx) {
         <div style="margin-top:.35rem">
           ${items.map(i => `
             <div style="font-size:.82rem;margin-top:.2rem">
-              💊 ${escapeHtml(i.medicine_name || i.generic_name || '')} ${escapeHtml(i.strength || '')} — ${escapeHtml(i.dosage || '')} ${escapeHtml(i.frequency || '')}
+              💊 ${escapeHtml(i.medicine_name || i.generic_name || '')} ${escapeHtml(i.strength || '')} — ${escapeHtml(i.dosage || '')} ${escapeHtml(i.frequency || '')}${(i.quantity_prescribed ?? i.quantity) ? ` · Qty: ${escapeHtml(String(i.quantity_prescribed ?? i.quantity))}` : ''}
             </div>
           `).join('')}
         </div>

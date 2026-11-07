@@ -485,7 +485,7 @@ async function openPatientPanel(transfer) {
                 💊 <strong>${escapeHtml(item.medicine_name || item.generic_name || '')}</strong> ${escapeHtml(item.strength || '')}
                 — ${escapeHtml(item.dosage || '')} · ${escapeHtml(item.route || '')} · ${escapeHtml(item.frequency || '')}
                 ${item.duration ? `· ${escapeHtml(item.duration)}` : ''}
-                ${item.quantity ? `· Qty: <strong>${escapeHtml(String(item.quantity))}</strong>` : ''}
+                ${(item.quantity_prescribed ?? item.quantity) ? `· Qty: <strong>${escapeHtml(String(item.quantity_prescribed ?? item.quantity))}</strong>` : ''}
                 ${item.quantity_dispensed ? `<span style="color:var(--success)"> (${escapeHtml(String(item.quantity_dispensed))} dispensed)</span>` : ''}
                 ${item.instructions ? `<div style="font-size:.76rem;color:var(--text-muted);margin-left:1.2rem"><em>Instructions: ${escapeHtml(item.instructions)}</em></div>` : ''}
               </div>
@@ -570,7 +570,7 @@ function renderRxCard(rx) {
                 💊 <strong>${escapeHtml(item.medicine_name || item.generic_name || '')}</strong> ${escapeHtml(item.strength || '')}
                 — ${escapeHtml(item.dosage || '')} · ${escapeHtml(item.route || '')} · ${escapeHtml(item.frequency || '')}
                 ${item.duration ? `· ${escapeHtml(item.duration)}` : ''}
-                ${item.quantity ? `· Qty: <strong>${escapeHtml(String(item.quantity))}</strong>` : ''}
+                ${(item.quantity_prescribed ?? item.quantity) ? `· Qty: <strong>${escapeHtml(String(item.quantity_prescribed ?? item.quantity))}</strong>` : ''}
                 ${item.quantity_dispensed ? `<span style="color:var(--success)"> (${escapeHtml(String(item.quantity_dispensed))} dispensed)</span>` : ''}
                 ${item.instructions ? `<div style="font-size:.76rem;color:var(--text-muted);margin-left:1.2rem"><em>Instructions: ${escapeHtml(item.instructions)}</em></div>` : ''}
               </div>
@@ -954,7 +954,7 @@ function renderDispenseRxDetail(rx) {
             💊 <strong>${escapeHtml(item.medicine_name || item.generic_name || '')}</strong> ${escapeHtml(item.strength || '')}
             <span style="color:var(--text-muted)">— ${escapeHtml(item.dosage || '')} · ${escapeHtml(item.route || '')} · ${escapeHtml(item.frequency || '')} ${item.duration ? `for ${escapeHtml(item.duration)}` : ''}</span>
             <span style="float:right;font-size:.78rem">
-              Ordered: <strong>${escapeHtml(String(item.quantity || 0))}</strong>
+              Ordered: <strong>${escapeHtml(String(item.quantity_prescribed ?? item.quantity ?? 0))}</strong>
               · Dispensed: <strong style="color:var(--success)">${escapeHtml(String(item.quantity_dispensed || 0))}</strong>
             </span>
             ${item.instructions ? `<div style="font-size:.76rem;color:var(--text-muted);margin-top:.2rem"><em>Instructions: ${escapeHtml(item.instructions)}</em></div>` : ''}
@@ -983,40 +983,58 @@ function openDispenseModal(rx, patient) {
   const items       = rx.prescription_items || [];
   const patientName = `${patient.first_name || ''} ${patient.last_name || ''}`.trim();
 
+  // Safely compute remaining quantities and filter unfulfilled items
+  const processedItems = items.map(item => {
+    const prescribed = Number(item.quantity_prescribed ?? item.quantity ?? 0);
+    const dispensed = Number(item.quantity_dispensed ?? 0);
+    const safePrescribed = (isNaN(prescribed) || prescribed < 0) ? 0 : prescribed;
+    const safeDispensed = (isNaN(dispensed) || dispensed < 0) ? 0 : dispensed;
+    const remaining = Math.max(0, safePrescribed - safeDispensed);
+    return {
+      ...item,
+      safePrescribed,
+      safeDispensed,
+      remaining
+    };
+  });
+
+  const unfulfilledItems = processedItems.filter(i => i.remaining > 0);
+
   content.innerHTML = `
     <div style="margin-bottom:1rem;padding:.75rem;background:var(--bg-secondary,#f8fafc);border-radius:8px">
       <div style="font-weight:700">${escapeHtml(patientName)}</div>
       <div style="font-size:.8rem;color:var(--text-muted)">HN: ${escapeHtml(patient.hospital_number || '—')} · RX #${escapeHtml(rx.prescription_number || rx.rx_number || rx.id.slice(0, 8))}</div>
     </div>
 
-    ${items.filter(i => (i.quantity_dispensed || 0) < (i.quantity || 0)).map(item => {
-      const remaining = (item.quantity || 0) - (item.quantity_dispensed || 0);
+    ${unfulfilledItems.length > 0 ? unfulfilledItems.map(item => {
+      const medName = item.medicine_name || item.generic_name || item.medicine?.generic_name || 'Medication';
+      const strength = item.strength || item.medicine?.strength || '';
       return `
         <div class="dispense-item-row" data-item-id="${escapeHtml(item.id)}" style="padding:.75rem;border:1px solid var(--border-color);border-radius:8px;margin-bottom:.6rem">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem">
             <div style="flex:1">
-              <div style="font-weight:600;font-size:.9rem">💊 ${escapeHtml(item.medicine_name || item.generic_name || '')} ${escapeHtml(item.strength || '')}</div>
+              <div style="font-weight:600;font-size:.9rem">💊 ${escapeHtml(medName)} ${escapeHtml(strength)}</div>
               <div style="font-size:.78rem;color:var(--text-muted)">${escapeHtml(item.dosage || '')} · ${escapeHtml(item.route || '')} · ${escapeHtml(item.frequency || '')} ${item.duration ? `· ${escapeHtml(item.duration)}` : ''}</div>
-              <div style="font-size:.78rem;color:var(--text-muted)">Ordered: ${escapeHtml(String(item.quantity || 0))} · Already dispensed: ${escapeHtml(String(item.quantity_dispensed || 0))} · Remaining: <strong>${escapeHtml(String(remaining))}</strong></div>
+              <div style="font-size:.78rem;color:var(--text-muted)">Ordered: ${escapeHtml(String(item.safePrescribed))} · Already dispensed: ${escapeHtml(String(item.safeDispensed))} · Remaining: <strong>${escapeHtml(String(item.remaining))}</strong></div>
             </div>
             <div style="display:flex;flex-direction:column;align-items:center;gap:.25rem">
               <label style="font-size:.75rem;color:var(--text-muted)">Qty to dispense</label>
               <input type="number" class="form-control dispense-qty-input"
                 data-item-id="${escapeHtml(item.id)}"
-                data-medicine-name="${escapeHtml(item.medicine_name || item.generic_name || '' || item.generic_name || '')}"
-                value="${remaining}"
-                min="0"
-                max="${remaining}"
+                data-medicine-name="${escapeHtml(medName)}"
+                data-max="${item.remaining}"
+                value="${item.remaining}"
+                min="1"
+                max="${item.remaining}"
                 style="width:80px;text-align:center"
+                required
               />
             </div>
           </div>
-          ${item.instructions ? `<div style="font-size:.78rem;margin-top:.35rem;color:var(--text-muted)">Instructions: ${escapeHtml(item.instructions)}</div>` : ''}
+          ${item.instructions || item.special_instructions ? `<div style="font-size:.78rem;margin-top:.35rem;color:var(--text-muted)">Instructions: ${escapeHtml(item.instructions || item.special_instructions)}</div>` : ''}
         </div>
       `;
-    }).join('')}
-
-    ${items.every(i => (i.quantity_dispensed || 0) >= (i.quantity || 0)) ? '<div class="empty-state">All items already dispensed.</div>' : ''}
+    }).join('') : '<div class="empty-state">All items in this prescription have already been dispensed.</div>'}
   `;
 
   overlay.classList.add('active');
@@ -1028,34 +1046,82 @@ async function confirmDispense() {
   const btn    = document.getElementById('dispense-modal-confirm');
   const inputs = document.querySelectorAll('.dispense-qty-input');
 
-  // Build atomic dispense items payload
+  // Build atomic dispense items payload with safe validation
   const itemsPayload = [];
-  inputs.forEach(input => {
-    const qty = parseInt(input.value) || 0;
-    if (qty > 0) {
-      itemsPayload.push({
-        prescription_item_id: input.dataset.itemId,
-        quantity: qty
-      });
-    }
-  });
+  for (const input of inputs) {
+    const rawVal = input.value.trim();
+    if (!rawVal) continue;
+    const qty = parseInt(rawVal, 10);
+    const max = parseInt(input.dataset.max, 10);
+    const itemId = input.dataset.itemId;
+    const medName = input.dataset.medicineName || 'Medication';
 
-  if (itemsPayload.length === 0) { showToast('Enter at least one quantity to dispense', 'warning'); return; }
+    if (isNaN(qty) || qty <= 0) {
+      showToast(`Invalid quantity for ${medName}. Please enter a positive number.`, 'warning');
+      input.focus();
+      return;
+    }
+
+    if (!isNaN(max) && qty > max) {
+      showToast(`Quantity for ${medName} exceeds remaining prescribed amount (${max}).`, 'warning');
+      input.focus();
+      return;
+    }
+
+    itemsPayload.push({
+      item_id: itemId,
+      prescription_item_id: itemId,
+      quantity: qty
+    });
+  }
+
+  if (itemsPayload.length === 0) { showToast('Enter at least one valid quantity to dispense', 'warning'); return; }
 
   btn.disabled    = true;
   btn.textContent = 'Processing...';
 
+  const rpcArgs = {
+    p_prescription_id: _dispenseRx.id,
+    p_items: itemsPayload,
+    p_notes: `Dispensed via pharmacy console for patient ${_dispensePatient.hospital_number || 'N/A'}`
+  };
+
   try {
-    // Execute atomic dispensing transaction
-    const { data, error } = await supabase.rpc('dispense_prescription_atomic', {
-      p_prescription_id: _dispenseRx.id,
-      p_items: itemsPayload,
-      p_notes: `Dispensed via pharmacy console for patient ${_dispensePatient.hospital_number || 'N/A'}`
+    console.log('Invoking dispense_prescription_atomic RPC with args:', {
+      p_prescription_id: rpcArgs.p_prescription_id,
+      items_count: rpcArgs.p_items.length,
+      items: rpcArgs.p_items.map(i => ({ item_id: i.item_id, quantity: i.quantity }))
     });
 
+    // Execute atomic dispensing transaction
+    const { data, error } = await supabase.rpc('dispense_prescription_atomic', rpcArgs);
+
     if (error) {
-      console.error('Atomic dispense error:', error);
-      showToast(`Dispensing failed: ${error.message}`, 'error');
+      console.error('dispense_prescription_atomic failed in pharmacy.js:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        args: {
+          p_prescription_id: rpcArgs.p_prescription_id,
+          p_items: rpcArgs.p_items
+        }
+      });
+
+      let friendlyMsg = error.message;
+      if (error.message?.includes('No active, unexpired batch with sufficient stock')) {
+        friendlyMsg = 'Insufficient stock: No active, unexpired batch with enough stock was found for this medication.';
+      } else if (error.message?.includes('Cannot dispense') && error.message?.includes('remaining unfulfilled quantity')) {
+        friendlyMsg = 'Requested quantity exceeds the remaining unfulfilled prescription quantity.';
+      } else if (error.message?.includes('Prescription') && error.message?.includes('cannot be dispensed')) {
+        friendlyMsg = 'This prescription cannot be dispensed in its current status.';
+      } else if (error.message?.includes('only active pharmacists or administrators')) {
+        friendlyMsg = 'Access denied: Only active pharmacists or administrators can dispense prescriptions.';
+      } else if (error.message?.includes('Batch') && error.message?.includes('expired')) {
+        friendlyMsg = 'Medication batch has expired and cannot be dispensed.';
+      }
+
+      showToast(`Dispensing failed: ${friendlyMsg}`, 'error');
       btn.disabled    = false;
       btn.textContent = 'Confirm Dispense';
       return;

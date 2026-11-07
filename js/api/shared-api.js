@@ -673,21 +673,46 @@ export async function createDispensingRecord(recordData, items = []) {
  */
 export async function dispenseItems(patientId, encounterId, prescriptionId, dispensingItems, notes) {
   if (prescriptionId) {
-    const itemsPayload = dispensingItems.map(item => ({
-      prescription_item_id: item.prescription_item_id,
-      medicine_id: item.medicine_id,
-      batch_id: item.batch_id || null,
-      quantity: item.quantity_dispensed,
-      instructions: item.instructions || item.special_instructions || null,
-    }));
+    const itemsPayload = dispensingItems.map(item => {
+      const itemId = item.item_id || item.prescription_item_id;
+      const qty = parseInt(item.quantity ?? item.quantity_dispensed, 10);
+      return {
+        item_id: itemId,
+        prescription_item_id: itemId,
+        medicine_id: item.medicine_id || null,
+        batch_id: item.batch_id || null,
+        quantity: isNaN(qty) ? 0 : qty,
+        instructions: item.instructions || item.special_instructions || item.substitution_reason || null,
+      };
+    });
 
-    const { data, error } = await supabase.rpc('dispense_prescription_atomic', {
+    const rpcArgs = {
       p_prescription_id: prescriptionId,
       p_items: itemsPayload,
       p_notes: notes || null,
+    };
+
+    console.log('Invoking dispense_prescription_atomic RPC with args:', {
+      p_prescription_id: rpcArgs.p_prescription_id,
+      items_count: rpcArgs.p_items.length,
+      items: rpcArgs.p_items.map(i => ({ item_id: i.item_id, quantity: i.quantity }))
     });
 
-    if (error) return { data: null, error };
+    const { data, error } = await supabase.rpc('dispense_prescription_atomic', rpcArgs);
+
+    if (error) {
+      console.error('dispense_prescription_atomic failed in shared-api:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        args: {
+          p_prescription_id: rpcArgs.p_prescription_id,
+          p_items: rpcArgs.p_items
+        }
+      });
+      return { data: null, error };
+    }
     return { data: { id: data.dispensing_record_id, ...data }, error: null };
   }
 
