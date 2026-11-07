@@ -10,15 +10,65 @@ import { supabase } from '../supabase-client.js';
 /**
  * Record patient vitals.
  * Only nurses can insert (enforced by RLS).
+ * Sanitizes payload to match public.patient_vitals schema exactly.
  * @param {Object} vitalsData
  * @returns {Promise<{data, error}>}
  */
 export async function recordVitals(vitalsData) {
+  const { data: userRes } = await supabase.auth.getUser();
+  const userId = userRes?.user?.id;
+
+  const weight = vitalsData.weight_kg ?? vitalsData.weight ?? null;
+  const height = vitalsData.height_cm ?? vitalsData.height ?? null;
+  let bmi = vitalsData.bmi ?? null;
+  if (bmi === null && weight && height && Number(height) > 0) {
+    bmi = Math.round((Number(weight) / ((Number(height) / 100) ** 2)) * 10) / 10;
+  }
+
+  const payload = {
+    patient_id: vitalsData.patient_id,
+    encounter_id: vitalsData.encounter_id || null,
+    recorded_by: vitalsData.recorded_by || userId,
+    temperature_c: vitalsData.temperature_c ?? vitalsData.temperature ?? null,
+    pulse_rate: vitalsData.pulse_rate ?? null,
+    respiratory_rate: vitalsData.respiratory_rate ?? null,
+    blood_pressure_systolic: vitalsData.blood_pressure_systolic ?? vitalsData.bp_systolic ?? null,
+    blood_pressure_diastolic: vitalsData.blood_pressure_diastolic ?? vitalsData.bp_diastolic ?? null,
+    sp_o2: vitalsData.sp_o2 ?? vitalsData.oxygen_saturation ?? null,
+    weight_kg: weight !== null ? Number(weight) : null,
+    height_cm: height !== null ? Number(height) : null,
+    bmi: bmi !== null ? Number(bmi) : null,
+    clinical_notes: vitalsData.clinical_notes ?? vitalsData.notes ?? null,
+  };
+
   const { data, error } = await supabase
     .from('patient_vitals')
-    .insert([vitalsData])
-    .select()
+    .insert([payload])
+    .select(`
+      *,
+      recorded_by_profile:profiles!patient_vitals_recorded_by_fkey(full_name, role)
+    `)
     .single();
+
+  if (error) {
+    console.error('Failed to record vitals:', {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+  }
+
+  if (data) {
+    data.bp_systolic = data.blood_pressure_systolic;
+    data.bp_diastolic = data.blood_pressure_diastolic;
+    data.temperature = data.temperature_c;
+    data.oxygen_saturation = data.sp_o2;
+    data.weight = data.weight_kg;
+    data.height = data.height_cm;
+    data.notes = data.clinical_notes;
+  }
+
   return { data, error };
 }
 
@@ -43,6 +93,25 @@ export async function getPatientVitals(patientId, encounterId) {
   }
 
   const { data, error } = await query;
+  if (error) {
+    console.error('Failed to fetch patient vitals:', {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+  }
+  if (data) {
+    data.forEach(v => {
+      v.bp_systolic = v.blood_pressure_systolic;
+      v.bp_diastolic = v.blood_pressure_diastolic;
+      v.temperature = v.temperature_c;
+      v.oxygen_saturation = v.sp_o2;
+      v.weight = v.weight_kg;
+      v.height = v.height_cm;
+      v.notes = v.clinical_notes;
+    });
+  }
   return { data, error };
 }
 

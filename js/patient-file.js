@@ -252,25 +252,32 @@ export class PatientFile {
       <div class="pf-subsection">
         <h4>Vital Signs History</h4>
         <div class="vitals-list">
-          ${vitals.slice(0, 10).map(v => `
+          ${vitals.slice(0, 10).map(v => {
+            const bpSys = v.blood_pressure_systolic ?? v.bp_systolic;
+            const bpDia = v.blood_pressure_diastolic ?? v.bp_diastolic;
+            const temp = v.temperature_c ?? v.temperature;
+            const spo2 = v.sp_o2 ?? v.oxygen_saturation;
+            const wt = v.weight_kg ?? v.weight;
+            const ht = v.height_cm ?? v.height;
+            const notes = v.clinical_notes ?? v.notes;
+            return `
             <div class="vitals-entry">
               <div class="vitals-row">
-                ${v.bp_systolic && v.bp_diastolic ? `<span class="vital-chip">BP: ${v.bp_systolic}/${v.bp_diastolic} mmHg</span>` : ''}
+                ${bpSys && bpDia ? `<span class="vital-chip">BP: ${bpSys}/${bpDia} mmHg</span>` : ''}
                 ${v.pulse_rate ? `<span class="vital-chip">Pulse: ${v.pulse_rate} bpm</span>` : ''}
-                ${v.temperature ? `<span class="vital-chip">Temp: ${v.temperature}°C</span>` : ''}
+                ${temp ? `<span class="vital-chip">Temp: ${temp}°C</span>` : ''}
                 ${v.respiratory_rate ? `<span class="vital-chip">RR: ${v.respiratory_rate}/min</span>` : ''}
-                ${v.oxygen_saturation ? `<span class="vital-chip">SpO₂: ${v.oxygen_saturation}%</span>` : ''}
-                ${v.weight ? `<span class="vital-chip">Wt: ${v.weight} kg</span>` : ''}
-                ${v.height ? `<span class="vital-chip">Ht: ${v.height} cm</span>` : ''}
+                ${spo2 ? `<span class="vital-chip">SpO₂: ${spo2}%</span>` : ''}
+                ${wt ? `<span class="vital-chip">Wt: ${wt} kg</span>` : ''}
+                ${ht ? `<span class="vital-chip">Ht: ${ht} cm</span>` : ''}
                 ${v.bmi ? `<span class="vital-chip">BMI: ${v.bmi}</span>` : ''}
-                ${v.blood_glucose ? `<span class="vital-chip">Glucose: ${v.blood_glucose} mmol/L</span>` : ''}
-                ${v.pain_score !== null && v.pain_score !== undefined ? `<span class="vital-chip">Pain: ${v.pain_score}/10</span>` : ''}
               </div>
               <div class="vitals-meta">
                 Recorded by ${escapeHtml(v.recorded_by_profile?.full_name || 'Staff')} · ${formatDate(v.created_at, 'datetime')}
-                ${v.notes ? `<div class="vitals-note">${escapeHtml(v.notes)}</div>` : ''}
+                ${notes ? `<div class="vitals-note">${escapeHtml(notes)}</div>` : ''}
               </div>
-            </div>`).join('')}
+            </div>`;
+          }).join('')}
         </div>
       </div>`;
   }
@@ -325,14 +332,7 @@ export class PatientFile {
             <label>Height (cm)</label>
             <input type="number" id="pf-height" step="0.1" min="30" max="300" placeholder="e.g. 175"/>
           </div>
-          <div class="form-group">
-            <label>Blood Glucose (mmol/L)</label>
-            <input type="number" id="pf-glucose" step="0.1" min="0" max="100" placeholder="e.g. 5.4"/>
-          </div>
-          <div class="form-group">
-            <label>Pain Score (0–10)</label>
-            <input type="number" id="pf-pain" min="0" max="10" placeholder="e.g. 3"/>
-          </div>
+
           <div class="form-group form-group-wide">
             <label>Nursing Notes</label>
             <textarea id="pf-vitals-notes" rows="2" placeholder="Additional nursing observations…"></textarea>
@@ -773,27 +773,60 @@ export class PatientFile {
       const saveBtn = document.getElementById('pf-save-vitals-btn');
       saveBtn.disabled = true;
       try {
-        const n = id => { const v = document.getElementById(id)?.value; return v === '' ? null : Number(v); };
+        const n = id => { const el = document.getElementById(id); if (!el) return null; const v = el.value.trim(); return v === '' ? null : Number(v); };
+        const weight = n('pf-weight');
+        const height = n('pf-height');
+        const bmi = (weight && height && height > 0)
+          ? Math.round((weight / ((height / 100) ** 2)) * 10) / 10
+          : null;
+        const notes = document.getElementById('pf-vitals-notes')?.value.trim() || null;
+
         const payload = {
           patient_id: patient.id,
           encounter_id: encounter?.id || null,
-          bp_systolic: n('pf-bp-sys'), bp_diastolic: n('pf-bp-dia'),
-          pulse_rate: n('pf-pulse'), respiratory_rate: n('pf-rr'),
-          temperature: n('pf-temp'), oxygen_saturation: n('pf-spo2'),
-          weight: n('pf-weight'), height: n('pf-height'),
-          blood_glucose: n('pf-glucose'), pain_score: n('pf-pain'),
-          notes: document.getElementById('pf-vitals-notes')?.value.trim() || null,
+          blood_pressure_systolic: n('pf-bp-sys'),
+          blood_pressure_diastolic: n('pf-bp-dia'),
+          pulse_rate: n('pf-pulse'),
+          respiratory_rate: n('pf-rr'),
+          temperature_c: n('pf-temp'),
+          sp_o2: n('pf-spo2'),
+          weight_kg: weight,
+          height_cm: height,
+          bmi: bmi,
+          clinical_notes: notes,
         };
-        const hasData = Object.entries(payload).some(([k, v]) =>
-          !['patient_id', 'encounter_id', 'notes'].includes(k) && v !== null
-        );
+        const hasData = [
+          payload.blood_pressure_systolic,
+          payload.blood_pressure_diastolic,
+          payload.pulse_rate,
+          payload.respiratory_rate,
+          payload.temperature_c,
+          payload.sp_o2,
+          payload.weight_kg,
+          payload.height_cm,
+        ].some(v => v !== null);
+
         if (!hasData) { showToast('Enter at least one vital sign measurement.', 'warning'); return; }
         const { error } = await recordVitals(payload);
-        if (error) throw error;
+        if (error) {
+          console.error('Failed to record vitals:', {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+          });
+          throw error;
+        }
         form.reset();
         showToast('Vital signs recorded successfully.', 'success');
         await this.refresh();
       } catch (err) {
+        console.error('Error recording vital signs:', {
+          code: err.code,
+          message: err.message,
+          details: err.details,
+          hint: err.hint,
+        });
         showToast(err.message || 'Failed to record vital signs.', 'error');
       } finally {
         this._saveInProgress = false;

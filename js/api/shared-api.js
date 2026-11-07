@@ -169,10 +169,21 @@ export async function getPatientFile(patientId) {
       })),
     }));
 
+    const vitals = (vitalsRes.data || []).map(v => ({
+      ...v,
+      bp_systolic: v.blood_pressure_systolic,
+      bp_diastolic: v.blood_pressure_diastolic,
+      temperature: v.temperature_c,
+      oxygen_saturation: v.sp_o2,
+      weight: v.weight_kg,
+      height: v.height_cm,
+      notes: v.clinical_notes,
+    }));
+
     return {
       patient: patient || patientRes.data,
       encounters: encountersRes.data || [],
-      vitals: vitalsRes.data || [],
+      vitals,
       notes,
       diagnoses,
       allergies: allergiesRes.data || [],
@@ -195,16 +206,74 @@ export async function getPatientVitals(patientId, encounterId = null) {
     .eq('patient_id', patientId)
     .order('created_at', { ascending: false });
   if (encounterId) query = query.eq('encounter_id', encounterId);
-  return query;
+  const res = await query;
+  if (res.data) {
+    res.data.forEach(v => {
+      v.bp_systolic = v.blood_pressure_systolic;
+      v.bp_diastolic = v.blood_pressure_diastolic;
+      v.temperature = v.temperature_c;
+      v.oxygen_saturation = v.sp_o2;
+      v.weight = v.weight_kg;
+      v.height = v.height_cm;
+      v.notes = v.clinical_notes;
+    });
+  }
+  return res;
 }
 
 export async function recordVitals(vitalsData) {
-  const { data: { user } } = await supabase.auth.getUser();
-  return supabase
+  const { data: userRes } = await supabase.auth.getUser();
+  const userId = userRes?.user?.id;
+
+  const weight = vitalsData.weight_kg ?? vitalsData.weight ?? null;
+  const height = vitalsData.height_cm ?? vitalsData.height ?? null;
+  let bmi = vitalsData.bmi ?? null;
+  if (bmi === null && weight && height && Number(height) > 0) {
+    bmi = Math.round((Number(weight) / ((Number(height) / 100) ** 2)) * 10) / 10;
+  }
+
+  const payload = {
+    patient_id: vitalsData.patient_id,
+    encounter_id: vitalsData.encounter_id || null,
+    recorded_by: vitalsData.recorded_by || userId,
+    temperature_c: vitalsData.temperature_c ?? vitalsData.temperature ?? null,
+    pulse_rate: vitalsData.pulse_rate ?? null,
+    respiratory_rate: vitalsData.respiratory_rate ?? null,
+    blood_pressure_systolic: vitalsData.blood_pressure_systolic ?? vitalsData.bp_systolic ?? null,
+    blood_pressure_diastolic: vitalsData.blood_pressure_diastolic ?? vitalsData.bp_diastolic ?? null,
+    sp_o2: vitalsData.sp_o2 ?? vitalsData.oxygen_saturation ?? null,
+    weight_kg: weight !== null ? Number(weight) : null,
+    height_cm: height !== null ? Number(height) : null,
+    bmi: bmi !== null ? Number(bmi) : null,
+    clinical_notes: vitalsData.clinical_notes ?? vitalsData.notes ?? null,
+  };
+
+  const res = await supabase
     .from('patient_vitals')
-    .insert([{ ...vitalsData, recorded_by: user.id }])
+    .insert([payload])
     .select('*, recorded_by_profile:profiles!patient_vitals_recorded_by_fkey(full_name, role)')
     .single();
+
+  if (res.error) {
+    console.error('Failed to record vitals:', {
+      code: res.error.code,
+      message: res.error.message,
+      details: res.error.details,
+      hint: res.error.hint,
+    });
+  }
+
+  if (res.data) {
+    res.data.bp_systolic = res.data.blood_pressure_systolic;
+    res.data.bp_diastolic = res.data.blood_pressure_diastolic;
+    res.data.temperature = res.data.temperature_c;
+    res.data.oxygen_saturation = res.data.sp_o2;
+    res.data.weight = res.data.weight_kg;
+    res.data.height = res.data.height_cm;
+    res.data.notes = res.data.clinical_notes;
+  }
+
+  return res;
 }
 
 // ─── Clinical Notes ───────────────────────────────────────────────────────────

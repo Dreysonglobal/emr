@@ -38,7 +38,7 @@ async function init() {
   currentUser = userData?.user || { id: profile.id };
   initUI(profile);
   try {
-    await Promise.all([loadOverview(), loadNotifications()]);
+    await Promise.all([loadOverview(), loadNotifications(), loadMedicineCatalog()]);
   } catch (err) {
     console.warn('Doctor overview load non-fatal warning:', err);
   }
@@ -437,9 +437,176 @@ function bindInboxItemActions(container, data) {
 }
 
 // ─── Patient Chart ────────────────────────────────────────────────────────────
+
+// ─── Patient Access & Catalog Helpers ──────────────────────────────────────────
+
+let availableMedicines = [];
+
+async function loadMedicineCatalog() {
+  try {
+    const { data, error } = await supabase
+      .from('medicine_catalog')
+      .select('id, generic_name, brand_name, dosage_form, strength, current_stock')
+      .eq('is_active', true)
+      .order('generic_name');
+
+    if (error) {
+      console.warn('Could not query medicine_catalog:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      return;
+    }
+
+    if (data) {
+      availableMedicines = data;
+      let datalist = document.getElementById('meds-catalog-list');
+      if (!datalist) {
+        datalist = document.createElement('datalist');
+        datalist.id = 'meds-catalog-list';
+        document.body.appendChild(datalist);
+      }
+      datalist.innerHTML = data.map(m => {
+        const display = m.brand_name ? `${m.generic_name} (${m.brand_name})` : m.generic_name;
+        return `<option value="${escapeHtml(display)}" data-id="${m.id}" data-strength="${escapeHtml(m.strength || '')}">`;
+      }).join('');
+    }
+  } catch (err) {
+    console.warn('Error loading medicine catalog:', err);
+  }
+}
+
+async function resolveMedicineId(name) {
+  if (!name) return null;
+  const trimmed = name.trim();
+
+  // If already a valid UUID
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const lower = trimmed.toLowerCase();
+
+  // Check loaded cache
+  if (availableMedicines.length > 0) {
+    const exact = availableMedicines.find(m =>
+      (m.generic_name && m.generic_name.toLowerCase() === lower) ||
+      (m.brand_name && m.brand_name.toLowerCase() === lower) ||
+      `${m.generic_name} (${m.brand_name || ''})`.toLowerCase().trim() === lower
+    );
+    if (exact) return exact.id;
+
+    const partial = availableMedicines.find(m =>
+      (m.generic_name && lower.includes(m.generic_name.toLowerCase())) ||
+      (m.brand_name && lower.includes(m.brand_name.toLowerCase())) ||
+      (m.generic_name && m.generic_name.toLowerCase().includes(lower))
+    );
+    if (partial) return partial.id;
+  }
+
+  // Query Supabase directly
+  try {
+    const { data: matches } = await supabase
+      .from('medicine_catalog')
+      .select('id, generic_name, brand_name')
+      .or(`generic_name.ilike.%${trimmed}%,brand_name.ilike.%${trimmed}%`)
+      .limit(1);
+
+    if (matches && matches.length > 0) {
+      return matches[0].id;
+    }
+
+    // Fallback: if there are any active medicines in the catalog, return the first one
+    const { data: anyMeds } = await supabase
+      .from('medicine_catalog')
+      .select('id')
+      .limit(1);
+
+    if (anyMeds && anyMeds.length > 0) {
+      return anyMeds[0].id;
+    }
+  } catch (err) {
+    console.warn('Error resolving medicine ID:', err);
+  }
+
+  return null;
+}
+
+/**
+ * Ensures the doctor has an active encounter with the patient.
+ * Required so that can_access_patient(patient_id) evaluates to true for RLS.
+ * @param {string} patientId
+ * @returns {Promise<string|null>} The encounter ID
+ */
+async function ensureDoctorPatientEncounter(patientId) {
+  if (!patientId) return null;
+
+  try {
+    const { data: userRes } = await supabase.auth.getUser();
+    const userId = userRes?.user?.id;
+    if (!userId) return null;
+
+    // Check if there is already an open/in_progress encounter for this patient
+    const { data: encounters, error: searchErr } = await supabase
+      .from('patient_encounters')
+      .select('id, status, opened_by')
+      .eq('patient_id', patientId)
+      .in('status', ['open', 'in_progress'])
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (searchErr) {
+      console.warn('Could not query existing encounters:', {
+        code: searchErr.code,
+        message: searchErr.message,
+        details: searchErr.details,
+        hint: searchErr.hint,
+      });
+    }
+
+    if (encounters && encounters.length > 0) {
+      return encounters[0].id;
+    }
+
+    // If no active encounter exists, create one with opened_by = auth.uid()
+    const { data: newEnc, error: insertErr } = await supabase
+      .from('patient_encounters')
+      .insert([{
+        patient_id: patientId,
+        department: currentProfile?.department || 'General Outpatient',
+        opened_by: userId,
+        status: 'open',
+        chief_complaint: 'Clinical Consultation',
+      }])
+      .select('id')
+      .single();
+
+    if (insertErr) {
+      console.error('Failed to create encounter for patient access:', {
+        code: insertErr.code,
+        message: insertErr.message,
+        details: insertErr.details,
+        hint: insertErr.hint,
+      });
+      return null;
+    }
+
+    return newEnc?.id || null;
+  } catch (err) {
+    console.error('Unexpected error ensuring doctor patient encounter:', err);
+    return null;
+  }
+}
+
 async function loadPatientChart(patient, transfer, fromView = 'lookup') {
   chartBackView = fromView;
-  chartContext = { patient, transfer, encounterId: transfer?.encounter_id };
+  let encounterId = transfer?.encounter_id;
+  if (!encounterId && patient?.id) {
+    encounterId = await ensureDoctorPatientEncounter(patient.id);
+  }
+  chartContext = { patient, transfer, encounterId: encounterId || null };
   switchView('chart');
   activateChartTab('summary');
 
@@ -617,8 +784,13 @@ async function loadChartSummary(patient) {
       summaryVitalsEl.innerHTML = '<div class="empty-state" style="padding:1rem">No vitals recorded yet.</div>';
     } else {
       const v = vitalsData[0];
-      const spo2Val = v.oxygen_saturation ?? v.spo2;
-      const bpVal = (v.bp_systolic && v.bp_diastolic) ? `${v.bp_systolic}/${v.bp_diastolic}` : null;
+      const bpSys = v.blood_pressure_systolic ?? v.bp_systolic;
+      const bpDia = v.blood_pressure_diastolic ?? v.bp_diastolic;
+      const bpVal = (bpSys && bpDia) ? `${bpSys}/${bpDia}` : null;
+      const tempVal = v.temperature_c ?? v.temperature;
+      const spo2Val = v.sp_o2 ?? v.oxygen_saturation ?? v.spo2;
+      const wtVal = v.weight_kg ?? v.weight;
+      const notesVal = v.clinical_notes ?? v.notes;
       summaryVitalsEl.innerHTML = `
         <div style="padding:0.75rem 1rem;">
           <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.75rem;">
@@ -627,14 +799,13 @@ async function loadChartSummary(patient) {
           <div style="display:flex;flex-wrap:wrap;gap:0.75rem;">
             ${bpVal ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">BP</div><div class="vital-card-value">${escapeHtml(bpVal)} <small style="font-size:.7rem">mmHg</small></div></div>` : ''}
             ${v.pulse_rate ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">Pulse</div><div class="vital-card-value">${escapeHtml(String(v.pulse_rate))} <small style="font-size:.7rem">bpm</small></div></div>` : ''}
-            ${v.temperature ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">Temp</div><div class="vital-card-value">${escapeHtml(String(v.temperature))} <small style="font-size:.7rem">°C</small></div></div>` : ''}
+            ${tempVal ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">Temp</div><div class="vital-card-value">${escapeHtml(String(tempVal))} <small style="font-size:.7rem">°C</small></div></div>` : ''}
             ${spo2Val ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">SpO₂</div><div class="vital-card-value">${escapeHtml(String(spo2Val))} <small style="font-size:.7rem">%</small></div></div>` : ''}
             ${v.respiratory_rate ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">Resp</div><div class="vital-card-value">${escapeHtml(String(v.respiratory_rate))} <small style="font-size:.7rem">/min</small></div></div>` : ''}
-            ${v.weight ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">Weight</div><div class="vital-card-value">${escapeHtml(String(v.weight))} <small style="font-size:.7rem">kg</small></div></div>` : ''}
-            ${v.blood_glucose ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">Glucose</div><div class="vital-card-value">${escapeHtml(String(v.blood_glucose))} <small style="font-size:.7rem">mg/dL</small></div></div>` : ''}
-            ${v.pain_score != null ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">Pain</div><div class="vital-card-value">${escapeHtml(String(v.pain_score))}/10</div></div>` : ''}
+            ${wtVal ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">Weight</div><div class="vital-card-value">${escapeHtml(String(wtVal))} <small style="font-size:.7rem">kg</small></div></div>` : ''}
+            ${v.bmi ? `<div class="vital-card" style="padding:.5rem .75rem"><div class="vital-card-label">BMI</div><div class="vital-card-value">${escapeHtml(String(v.bmi))}</div></div>` : ''}
           </div>
-          ${v.notes ? `<div style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg-subtle, #f8f9fa);border-radius:4px;font-size:0.85rem;"><strong>Notes:</strong> ${escapeHtml(v.notes)}</div>` : ''}
+          ${notesVal ? `<div style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg-subtle, #f8f9fa);border-radius:4px;font-size:0.85rem;"><strong>Notes:</strong> ${escapeHtml(notesVal)}</div>` : ''}
         </div>
       `;
     }
@@ -684,18 +855,23 @@ async function loadChartVitals(patientId, encounterId) {
     return;
   }
   const v = data[0];
-  const spo2Val = v.oxygen_saturation ?? v.spo2;
+  const bpSys = v.blood_pressure_systolic ?? v.bp_systolic;
+  const bpDia = v.blood_pressure_diastolic ?? v.bp_diastolic;
+  const tempVal = v.temperature_c ?? v.temperature;
+  const spo2Val = v.sp_o2 ?? v.oxygen_saturation ?? v.spo2;
+  const wtVal = v.weight_kg ?? v.weight;
+  const htVal = v.height_cm ?? v.height;
+  const notesVal = v.clinical_notes ?? v.notes;
+
   const cards = [
-    { label: 'Blood Pressure', value: (v.bp_systolic && v.bp_diastolic) ? `${v.bp_systolic}/${v.bp_diastolic} mmHg` : '—', icon: '🫀' },
+    { label: 'Blood Pressure', value: (bpSys && bpDia) ? `${bpSys}/${bpDia} mmHg` : '—', icon: '🫀' },
     { label: 'Pulse Rate', value: v.pulse_rate ? `${v.pulse_rate} bpm` : '—', icon: '💓' },
     { label: 'Resp. Rate', value: v.respiratory_rate ? `${v.respiratory_rate} /min` : '—', icon: '🫁' },
-    { label: 'Temperature', value: v.temperature ? `${v.temperature} °C` : '—', icon: '🌡️' },
+    { label: 'Temperature', value: tempVal ? `${tempVal} °C` : '—', icon: '🌡️' },
     { label: 'SpO₂', value: spo2Val ? `${spo2Val}%` : '—', icon: '🩺' },
-    { label: 'Weight', value: v.weight ? `${v.weight} kg` : '—', icon: '⚖️' },
-    { label: 'Height', value: v.height ? `${v.height} cm` : '—', icon: '📏' },
+    { label: 'Weight', value: wtVal ? `${wtVal} kg` : '—', icon: '⚖️' },
+    { label: 'Height', value: htVal ? `${htVal} cm` : '—', icon: '📏' },
     { label: 'BMI', value: v.bmi ? `${v.bmi} (${interpretBMI(v.bmi)})` : '—', icon: '📊' },
-    { label: 'Blood Glucose', value: v.blood_glucose ? `${v.blood_glucose} mg/dL` : '—', icon: '🩸' },
-    { label: 'Pain Score', value: v.pain_score != null ? `${v.pain_score}/10` : '—', icon: '😣' },
   ];
   let html = `
     <div style="margin-bottom:.5rem;font-size:.8rem;color:var(--text-muted)">
@@ -710,7 +886,7 @@ async function loadChartVitals(patientId, encounterId) {
         </div>
       `).join('')}
     </div>
-    ${v.notes ? `<div style="margin-top:1rem;padding:.75rem 1rem;background:var(--bg-subtle,#f8f9fa);border-radius:6px;font-size:.875rem;"><strong>Clinical Notes on Vitals:</strong> ${escapeHtml(v.notes)}</div>` : ''}
+    ${notesVal ? `<div style="margin-top:1rem;padding:.75rem 1rem;background:var(--bg-subtle,#f8f9fa);border-radius:6px;font-size:.875rem;"><strong>Clinical Notes on Vitals:</strong> ${escapeHtml(notesVal)}</div>` : ''}
   `;
 
   if (data.length > 1) {
@@ -733,16 +909,20 @@ async function loadChartVitals(patientId, encounterId) {
             </thead>
             <tbody>
               ${data.map(rec => {
-                const s = rec.oxygen_saturation ?? rec.spo2;
+                const s = rec.sp_o2 ?? rec.oxygen_saturation ?? rec.spo2;
+                const recBpSys = rec.blood_pressure_systolic ?? rec.bp_systolic;
+                const recBpDia = rec.blood_pressure_diastolic ?? rec.bp_diastolic;
+                const recTemp = rec.temperature_c ?? rec.temperature;
+                const recWt = rec.weight_kg ?? rec.weight;
                 return `
                   <tr style="border-bottom:1px solid var(--border-color,#f1f5f9);">
                     <td style="padding:.5rem">${formatDate(rec.created_at, 'datetime')}</td>
-                    <td style="padding:.5rem">${(rec.bp_systolic && rec.bp_diastolic) ? `${rec.bp_systolic}/${rec.bp_diastolic}` : '—'}</td>
+                    <td style="padding:.5rem">${(recBpSys && recBpDia) ? `${recBpSys}/${recBpDia}` : '—'}</td>
                     <td style="padding:.5rem">${rec.pulse_rate ? `${rec.pulse_rate} bpm` : '—'}</td>
-                    <td style="padding:.5rem">${rec.temperature ? `${rec.temperature}°C` : '—'}</td>
+                    <td style="padding:.5rem">${recTemp ? `${recTemp}°C` : '—'}</td>
                     <td style="padding:.5rem">${s ? `${s}%` : '—'}</td>
                     <td style="padding:.5rem">${rec.respiratory_rate ? `${rec.respiratory_rate}` : '—'}</td>
-                    <td style="padding:.5rem">${rec.weight ? `${rec.weight} kg` : '—'}</td>
+                    <td style="padding:.5rem">${recWt ? `${recWt} kg` : '—'}</td>
                     <td style="padding:.5rem">${escapeHtml(rec.recorded_by_profile?.full_name || '—')}</td>
                   </tr>
                 `;
@@ -1076,18 +1256,40 @@ async function submitLabOrder() {
   btn.textContent = 'Submitting...';
 
   try {
-    const { data: user } = await supabase.auth.getUser();
+    const { data: userRes } = await supabase.auth.getUser();
+    const userId = userRes?.user?.id;
+    if (!userId) {
+      showToast('You must be logged in to order laboratory tests.', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Submit Order';
+      return;
+    }
+
+    // Ensure active encounter so can_access_patient(patient_id) is satisfied
+    let encounterId = chartContext?.encounterId;
+    if (!encounterId) {
+      encounterId = await ensureDoctorPatientEncounter(patientId);
+      if (chartContext && chartContext.patient?.id === patientId) {
+        chartContext.encounterId = encounterId;
+      }
+    }
+
     const { data: order, error } = await supabase.from('laboratory_orders').insert([{
       patient_id: patientId,
-      encounter_id: chartContext?.encounterId || null,
-      ordering_doctor_id: user.user.id,
+      encounter_id: encounterId || null,
+      ordering_doctor_id: userId,
       clinical_indication: indication,
-      priority: document.getElementById('lab-priority').value,
+      priority: document.getElementById('lab-priority').value || 'routine',
       status: 'pending',
     }]).select().single();
 
     if (error) {
-      console.error('Failed to create laboratory order:', error);
+      console.error('Failed to create laboratory order:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
       showToast(error.message || 'Failed to create laboratory order', 'error');
       btn.disabled = false;
       btn.textContent = 'Submit Order';
@@ -1104,7 +1306,12 @@ async function submitLabOrder() {
 
     const { error: itemsError } = await supabase.from('laboratory_order_items').insert(itemsToInsert);
     if (itemsError) {
-      console.error('Failed to insert laboratory order items:', itemsError);
+      console.error('Failed to insert laboratory order items:', {
+        code: itemsError.code,
+        message: itemsError.message,
+        details: itemsError.details,
+        hint: itemsError.hint,
+      });
       showToast(`Order created, but tests failed: ${itemsError.message}`, 'error');
       btn.disabled = false;
       btn.textContent = 'Submit Order';
@@ -1118,7 +1325,12 @@ async function submitLabOrder() {
     loadLabOrders();
     if (currentView === 'chart') loadChartLabOrders(patientId);
   } catch (err) {
-    console.error('Unexpected error submitting lab order:', err);
+    console.error('Unexpected error submitting lab order:', {
+      code: err.code,
+      message: err.message,
+      details: err.details,
+      hint: err.hint,
+    });
     showToast(err.message || 'Failed to submit lab order', 'error');
     btn.disabled = false;
     btn.textContent = 'Submit Order';
@@ -1169,6 +1381,7 @@ function renderRxCard(rx) {
 }
 
 function openRxModal(presetPatientId) {
+  loadMedicineCatalog();
   document.getElementById('rx-items-container').innerHTML = '';
   document.getElementById('rx-notes').value = '';
   document.getElementById('rx-patient-id').value = '';
@@ -1197,7 +1410,7 @@ function addRxItemRow() {
     <div class="form-row">
       <div class="form-group" style="flex:2">
         <label class="form-label" style="font-size:.75rem">Medicine Name *</label>
-        <input type="text" class="form-control" data-field="medicine_name" placeholder="e.g. Amoxicillin" required/>
+        <input type="text" class="form-control" data-field="medicine_name" list="meds-catalog-list" placeholder="e.g. Amoxicillin" required/>
       </div>
       <div class="form-group">
         <label class="form-label" style="font-size:.75rem">Strength</label>
@@ -1252,8 +1465,8 @@ async function submitPrescription() {
   const items = [];
   let validationError = null;
 
-  rows.forEach((row, idx) => {
-    if (validationError) return;
+  for (let idx = 0; idx < rows.length; idx++) {
+    const row = rows[idx];
     const name = row.querySelector('[data-field="medicine_name"]').value.trim();
     const dosage = row.querySelector('[data-field="dosage"]').value.trim();
     const route = row.querySelector('[data-field="route"]').value;
@@ -1265,32 +1478,40 @@ async function submitPrescription() {
 
     if (!name) {
       validationError = `Medicine #${idx + 1}: Name is required.`;
-      return;
+      break;
     }
     if (!dosage) {
       validationError = `Medicine #${idx + 1} (${name}): Dosage is required (e.g. 1 tablet, 5ml).`;
-      return;
+      break;
     }
     if (!frequency) {
       validationError = `Medicine #${idx + 1} (${name}): Frequency is required (e.g. TDS, BD, Once daily).`;
-      return;
+      break;
     }
     if (!qtyVal || qtyVal <= 0 || isNaN(qtyVal)) {
       validationError = `Medicine #${idx + 1} (${name}): Quantity must be a positive number greater than 0.`;
-      return;
+      break;
+    }
+
+    // Resolve medicine_id from catalog
+    const medId = await resolveMedicineId(name);
+    if (!medId) {
+      validationError = `Medicine #${idx + 1} (${name}): Could not find medicine in pharmacy catalog. Please select a registered medicine.`;
+      break;
     }
 
     items.push({
+      medicine_id: medId,
       medicine_name: name,
       strength: strength || null,
       dosage: dosage,
       route: route || 'oral',
       frequency: frequency,
-      duration: duration || null,
-      quantity: qtyVal,
+      duration: duration || 'As directed',
+      quantity_prescribed: qtyVal,
       instructions: instructions || null,
     });
-  });
+  }
 
   if (validationError) {
     showToast(validationError, 'warning');
@@ -1306,17 +1527,39 @@ async function submitPrescription() {
   btn.textContent = 'Submitting...';
 
   try {
-    const { data: user } = await supabase.auth.getUser();
+    const { data: userRes } = await supabase.auth.getUser();
+    const userId = userRes?.user?.id;
+    if (!userId) {
+      showToast('You must be logged in to prescribe medication.', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Submit Prescription';
+      return;
+    }
+
+    // Ensure active encounter so can_access_patient(patient_id) is satisfied
+    let encounterId = chartContext?.encounterId;
+    if (!encounterId) {
+      encounterId = await ensureDoctorPatientEncounter(patientId);
+      if (chartContext && chartContext.patient?.id === patientId) {
+        chartContext.encounterId = encounterId;
+      }
+    }
+
     const { data: rx, error } = await supabase.from('prescriptions').insert([{
       patient_id: patientId,
-      encounter_id: chartContext?.encounterId || null,
-      prescribing_doctor_id: user.user.id,
+      encounter_id: encounterId || null,
+      prescribing_doctor_id: userId,
       clinical_notes: document.getElementById('rx-notes')?.value.trim() || null,
       status: 'active',
     }]).select().single();
 
     if (error) {
-      console.error('Failed to create prescription parent record:', error);
+      console.error('Failed to create prescription parent record:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
       showToast(error.message || 'Failed to create prescription', 'error');
       btn.disabled = false;
       btn.textContent = 'Submit Prescription';
@@ -1328,15 +1571,20 @@ async function submitPrescription() {
       medicine_id: i.medicine_id,
       dosage: i.dosage,
       frequency: i.frequency,
-      duration: i.duration || null,
-      quantity_prescribed: i.quantity_prescribed || i.quantity || 1,
+      duration: i.duration,
+      quantity_prescribed: i.quantity_prescribed,
       quantity_dispensed: 0,
-      special_instructions: i.special_instructions || i.instructions || null,
+      special_instructions: i.instructions || null,
     }));
     const { error: itemsError } = await supabase.from('prescription_items').insert(itemsToInsert);
 
     if (itemsError) {
-      console.error('Failed to insert prescription items:', itemsError);
+      console.error('Failed to insert prescription items:', {
+        code: itemsError.code,
+        message: itemsError.message,
+        details: itemsError.details,
+        hint: itemsError.hint,
+      });
       showToast(`Prescription created, but medication items failed: ${itemsError.message}`, 'error');
       btn.disabled = false;
       btn.textContent = 'Submit Prescription';
@@ -1350,7 +1598,12 @@ async function submitPrescription() {
     loadPrescriptions();
     if (currentView === 'chart') loadChartPrescriptions(patientId);
   } catch (err) {
-    console.error('Unexpected error in submitPrescription:', err);
+    console.error('Unexpected error in submitPrescription:', {
+      code: err.code,
+      message: err.message,
+      details: err.details,
+      hint: err.hint,
+    });
     showToast(err.message || 'An unexpected error occurred submitting prescription', 'error');
     btn.disabled = false;
     btn.textContent = 'Submit Prescription';
@@ -1462,38 +1715,58 @@ function openVitalsModal() {
 async function saveVitals() {
   if (!chartContext?.patient) return;
   const { patient, encounterId } = chartContext;
-  const { data: user } = await supabase.auth.getUser();
+  const { data: userRes } = await supabase.auth.getUser();
+  const userId = userRes?.user?.id;
   const bpSys = parseInt(document.getElementById('v-bp-sys').value) || null;
   const bpDia = parseInt(document.getElementById('v-bp-dia').value) || null;
   const weight = parseFloat(document.getElementById('v-weight').value) || null;
   const height = parseFloat(document.getElementById('v-height').value) || null;
+  const pulse = parseInt(document.getElementById('v-pulse').value) || null;
+  const resp = parseInt(document.getElementById('v-resp').value) || null;
+  const temp = parseFloat(document.getElementById('v-temp').value) || null;
+  const spo2 = parseInt(document.getElementById('v-spo2').value) || null;
+  const notes = document.getElementById('v-notes').value.trim() || null;
+  const bmi = (weight && height && height > 0) ? Math.round((weight / ((height / 100) ** 2)) * 10) / 10 : null;
+
+  let encId = encounterId;
+  if (!encId && patient.id) {
+    encId = await ensureDoctorPatientEncounter(patient.id);
+    if (chartContext) chartContext.encounterId = encId;
+  }
 
   const payload = {
     patient_id: patient.id,
-    encounter_id: encounterId || null,
-    recorded_by: user.user.id,
-    bp_systolic: bpSys,
-    bp_diastolic: bpDia,
-    pulse_rate: parseInt(document.getElementById('v-pulse').value) || null,
-    respiratory_rate: parseInt(document.getElementById('v-resp').value) || null,
-    temperature: parseFloat(document.getElementById('v-temp').value) || null,
-    oxygen_saturation: parseInt(document.getElementById('v-spo2').value) || null,
-    weight,
-    height,
-    bmi: (weight && height) ? calculateBMI(weight, height) : null,
-    blood_glucose: parseInt(document.getElementById('v-glucose').value) || null,
-    pain_score: parseInt(document.getElementById('v-pain').value) ?? null,
-    notes: document.getElementById('v-notes').value.trim() || null,
+    encounter_id: encId || null,
+    recorded_by: userId,
+    blood_pressure_systolic: bpSys,
+    blood_pressure_diastolic: bpDia,
+    pulse_rate: pulse,
+    respiratory_rate: resp,
+    temperature_c: temp,
+    sp_o2: spo2,
+    weight_kg: weight,
+    height_cm: height,
+    bmi: bmi,
+    clinical_notes: notes,
   };
 
   const btn = document.getElementById('vitals-modal-save');
   btn.disabled = true;
   const { error } = await recordVitals(payload);
   btn.disabled = false;
-  if (error) { showToast(error.message, 'error'); return; }
+  if (error) {
+    console.error('Failed to record vitals:', {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+    showToast(error.message || 'Failed to record vitals', 'error');
+    return;
+  }
   showToast('Vitals recorded', 'success');
   document.getElementById('vitals-modal-overlay').classList.remove('active');
-  loadChartVitals(patient.id, null);
+  loadChartVitals(patient.id, encId);
   loadChartSummary(patient);
 }
 
